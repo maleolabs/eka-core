@@ -340,6 +340,16 @@ func (AuthoringService) NewDraft(rt *Runtime, req NewDraftRequest) (*Draft, erro
 	if err != nil {
 		return nil, err
 	}
+	return newDraftFile(ws, req, nil)
+}
+
+// newDraftFile scaffolds ONE draft file into the workspace drafts tree —
+// the shared implementation of NewDraft and the batch scaffold
+// (NewDraftBatch): it validates the request, renders the deterministic
+// template (with extraContent merged over the type's required-section
+// placeholders — the inline counterpart of NewDraftRequest.ContentFile)
+// and writes the file with the atomic O_CREATE|O_EXCL collision guard.
+func newDraftFile(ws *workspace.Workspace, req NewDraftRequest, extraContent map[string]any) (*Draft, error) {
 	if _, ok := conformance.DomainForToken(req.Type); !ok {
 		return nil, fmt.Errorf("authoring: unknown artifact type %q; expected one of the 27 EKA type tokens", req.Type)
 	}
@@ -371,7 +381,7 @@ func (AuthoringService) NewDraft(rt *Runtime, req NewDraftRequest) (*Draft, erro
 	}
 	path := draftPath(ws, req.Project, req.Type, req.ID)
 
-	body, err := draftJSON(req)
+	body, err := draftJSON(req, extraContent)
 	if err != nil {
 		return nil, fmt.Errorf("authoring: cannot render draft %s: %w", req.Type+":"+req.ID, err)
 	}
@@ -481,9 +491,10 @@ type draftChangeLog struct {
 // the type's required section keys as empty placeholders (with the
 // projection header as the tkt- template's commands value — rule 8
 // requires it, so a scaffolded draft must be publishable without
-// edits), merged with the ContentFile JSON object when given (the
-// object's keys overwrite/add; raw text files are rejected).
-func draftJSON(req NewDraftRequest) ([]byte, error) {
+// edits), merged with the ContentFile JSON object when given and then
+// with extraContent (the batch scaffold's inline content — its keys
+// overwrite/add; raw text is rejected for JSON drafts).
+func draftJSON(req NewDraftRequest, extraContent map[string]any) ([]byte, error) {
 	doc := draftDoc{
 		Namespace: req.Namespace,
 		Type:      req.Type,
@@ -588,6 +599,12 @@ func draftJSON(req NewDraftRequest) ([]byte, error) {
 		for k, v := range merge {
 			doc.Content[k] = v
 		}
+	}
+	// Inline batch content (extraContent) merges over everything: the
+	// batch target's content is the per-target authoring input, so it
+	// wins over any file merge (the batch path never sets ContentFile).
+	for k, v := range extraContent {
+		doc.Content[k] = v
 	}
 	out, err := json.Marshal(&doc)
 	if err != nil {
