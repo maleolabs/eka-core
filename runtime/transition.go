@@ -725,7 +725,7 @@ func transitionContentState(st *store.Store, project, sourceRepo string, ref con
 	// of the project (the successor set; a draft successor does not
 	// count until published). decision- supersession carries no gate
 	// (R9 applies to adr- only).
-	if ref.Type == "adr" && to == "superseded" && !hasSuperseder(st, project, ref) {
+	if ref.Type == "adr" && to == "superseded" && !hasSuperseder(st, project, ref, current.Identity.InstanceVersion) {
 		return nil, &TransitionRefusal{
 			Reason: fmt.Sprintf("transition gate R9: superseded ADR %s must be referenced by a replacement via `supersedes`",
 				ref.Namespace+"/"+ref.Type+":"+ref.ID),
@@ -748,18 +748,26 @@ func ownsContentState(typeToken string) bool {
 	return false
 }
 
-// hasSuperseder reports whether any unit of the project references the
-// target line via a `supersedes` relationship — the conformance R9
-// replacement rule, evaluated over the workspace store (the published
-// successor set). A store read failure is conservative: it never
-// confirms a replacement.
-func hasSuperseder(st *store.Store, project string, target conformance.Reference) bool {
+// hasSuperseder reports whether any OTHER unit of the project
+// references the target line via a `supersedes` relationship — the
+// conformance R9 replacement rule, evaluated over the workspace store
+// (the published successor set), mirroring the exact-instance
+// semantics of the conformance engine (rules.go R9): a versioned
+// reference counts only when its version equals the target's current
+// instance version; an unversioned reference always counts; the
+// target's own unit never counts against itself (b == a parity). A
+// store read failure is conservative: it never confirms a replacement.
+func hasSuperseder(st *store.Store, project string, target conformance.Reference, instanceVersion int) bool {
 	units, err := st.UnitsByProject(project)
 	if err != nil {
 		return false
 	}
 	targetLine := target.Namespace + "/" + target.Type + ":" + target.ID
 	for _, u := range units {
+		if u.Identity.Namespace == target.Namespace && u.Identity.Type == target.Type &&
+			u.Identity.ID == target.ID && u.Identity.InstanceVersion == instanceVersion {
+			continue // The target's own current instance never supersedes itself.
+		}
 		for _, rel := range u.Relationships {
 			if rel.Type != "supersedes" {
 				continue
@@ -768,9 +776,13 @@ func hasSuperseder(st *store.Store, project string, target conformance.Reference
 			if err != nil {
 				continue
 			}
-			if ref.Namespace+"/"+ref.Type+":"+ref.ID == targetLine {
-				return true
+			if ref.Namespace+"/"+ref.Type+":"+ref.ID != targetLine {
+				continue
 			}
+			if ref.HasVersion && ref.Version != instanceVersion {
+				continue // A successor may only supersede the exact instance it replaces.
+			}
+			return true
 		}
 	}
 	return false

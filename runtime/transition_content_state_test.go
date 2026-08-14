@@ -190,6 +190,85 @@ func TestTransitionContentStateADRSupersedeGate(t *testing.T) {
 	}
 }
 
+// TestTransitionContentStateADRSupersedeGateVersionedReference: the R9
+// gate mirrors the exact-instance semantics of the conformance engine
+// (rules.go: a versioned `supersedes` reference counts as a replacement
+// only when its version equals the target's current instance version).
+// A successor referencing test-ns/adr:one:2 against a target at
+// instance version 1 refuses the gate (publishing would leave a state
+// `eka sync` flags); the same successor referencing the exact instance
+// test-ns/adr:one:1 satisfies it.
+func TestTransitionContentStateADRSupersedeGateVersionedReference(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, contentUnit("adr", "one", 1, "accepted", contentLog("accepted")), project, "repo")
+
+	// A versioned reference to the WRONG instance: the gate refuses.
+	succWrong := contentUnit("adr", "two", 1, "proposed", contentLog("proposed"))
+	succWrong.Relationships = []exchange.Relationship{{Type: "supersedes", Target: "test-ns/adr:one:2"}}
+	putUnit(t, r, succWrong, project, "repo")
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "adr:one", To: "superseded", By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) || !strings.Contains(refusal.Reason, "transition gate R9") {
+		t.Fatalf("superseded with a wrong-instance reference = %v, want the R9 refusal", err)
+	}
+	if state, _ := contentState(t, r, "adr", "one"); state != "accepted" {
+		t.Errorf("content-state = %q, want accepted (refused runs publish nothing)", state)
+	}
+
+	// The same successor re-pointed at the EXACT instance: the gate
+	// passes (the wrong-instance successor stays ignored).
+	succOK := contentUnit("adr", "two", 2, "proposed", contentLog("proposed"))
+	succOK.Relationships = []exchange.Relationship{{Type: "supersedes", Target: "test-ns/adr:one:1"}}
+	putUnit(t, r, succOK, project, "repo")
+	res, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "adr:one", To: "superseded", By: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("superseded with an exact-instance reference: %v", err)
+	}
+	if res.From != "accepted" || res.To != "superseded" {
+		t.Errorf("result = %+v, want accepted -> superseded", res)
+	}
+	if state, _ := contentState(t, r, "adr", "one"); state != "superseded" {
+		t.Errorf("content-state = %q, want superseded", state)
+	}
+}
+
+// TestTransitionContentStateNote: cmt- owns content-state (Rule 4) and
+// transitions along the standard variant like any living-type artifact;
+// note-state stays untouched (that is `eka note resolve`'s domain).
+func TestTransitionContentStateNote(t *testing.T) {
+	r, project := transitionRuntime(t)
+	cmt := contentUnit("cmt", "one", 1, "draft", contentLog("draft"))
+	cmt.StateVector.NoteState = "open"
+	putUnit(t, r, cmt, project, "repo")
+
+	res, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "cmt:one", To: "review", By: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("cmt draft -> review: %v", err)
+	}
+	if res.From != "draft" || res.To != "review" {
+		t.Errorf("result = %+v, want draft -> review", res)
+	}
+	units, err := r.ws.Store().UnitsByLine("test-ns", "cmt", "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cur := units[0]
+	for _, cand := range units {
+		if cand.Identity.InstanceVersion > cur.Identity.InstanceVersion {
+			cur = cand
+		}
+	}
+	if cur.StateVector.ContentState != "review" || cur.StateVector.NoteState != "open" {
+		t.Errorf("state vector = %+v, want content-state review with note-state open untouched", cur.StateVector)
+	}
+}
+
 // TestTransitionContentStateDecision: the decision variant moves
 // draft -> accepted -> superseded, and decision- supersession carries
 // no replacement gate (R9 applies to adr- only).
@@ -246,7 +325,7 @@ func TestTransitionContentStateRefusals(t *testing.T) {
 		{"living terminal explicit", TransitionRequest{Target: "spec:amended-one", To: "review"}, "amended is terminal"},
 		{"living terminal forward", TransitionRequest{Target: "spec:amended-one", Forward: true}, "no forward transition"},
 		{"adr skip proposed to superseded", TransitionRequest{Target: "adr:skip-adr", To: "superseded"}, "is not in the content-state table"},
-		{"adr terminal explicit", TransitionRequest{Target: "adr:accepted-adr", To: "accepted"}, "content-state is forward-only"},
+		{"adr no-op accepted", TransitionRequest{Target: "adr:accepted-adr", To: "accepted"}, "content-state is forward-only"},
 	}
 	for _, c := range cases {
 		c.req.RepoPath = "."
