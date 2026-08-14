@@ -327,7 +327,8 @@ func resolveDraftFile(ws *workspace.Workspace, rt *Runtime, projectHint, typeTok
 // NewDraft scaffolds one draft: the deterministic JSON authoring
 // template (namespace, type, id, revision 1, the type's owned state
 // fields with their initial values, optional dimension/phase/relationship
-// fields, the change-log with one "-" -> initial entry per owned domain,
+// fields, the change-log with one "-" -> initial entry per owned domain
+// plus the phase context when given,
 // plus the type's required content keys as empty placeholders — or the
 // ContentFile JSON object merged into the content). The template is
 // byte-deterministic for identical inputs within a day (the change-log
@@ -442,7 +443,8 @@ func draftDefaultState(typeToken, domain string) string {
 // draftDoc is the deterministic §3.2 authoring document of one
 // scaffolded draft: identity + revision 1, the owned-state defaults,
 // optional dimension/phase/relationship fields, the change-log with one
-// "-" -> initial entry per owned domain, and the required content keys
+// "-" -> initial entry per owned domain (plus the phase context when
+// given), and the required content keys
 // (empty placeholders). Field order is the schema's canonical order
 // (spec-standard-v2 §3.2).
 type draftDoc struct {
@@ -527,7 +529,13 @@ func draftJSON(req NewDraftRequest) ([]byte, error) {
 		}
 		doc.Relationships[conformance.StateKeyCamel(field)] = targets
 	}
-	if len(owned) > 0 {
+	// The change-log covers every owned domain plus, when the draft
+	// carries a phase, the phase context (rule 7 requires a change-log
+	// entry for every field with a change-log domain — a scaffolded
+	// draft must be publishable without edits, so the phase entry is
+	// scaffolded alongside the field: "-" -> the given value, by the
+	// author, same date as the state entries).
+	if len(owned) > 0 || req.Phase != "" {
 		today := time.Now().Format("2006-01-02")
 		by := req.By
 		if by.Name == "" {
@@ -539,6 +547,15 @@ func draftJSON(req NewDraftRequest) ([]byte, error) {
 				Domain: conformance.StateKeyCamel(domain),
 				From:   "-",
 				To:     draftDefaultState(req.Type, domain),
+				By:     by,
+			})
+		}
+		if req.Phase != "" {
+			doc.ChangeLog = append(doc.ChangeLog, draftChangeLog{
+				Date:   today,
+				Domain: conformance.DomainPhase,
+				From:   "-",
+				To:     req.Phase,
 				By:     by,
 			})
 		}
