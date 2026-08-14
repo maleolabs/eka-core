@@ -178,6 +178,49 @@ func TestNewDraftBatchContentMerged(t *testing.T) {
 	}
 }
 
+// TestRollbackCreated: the rollback loop CONTINUES across every created
+// draft even when an individual removal fails — a blocked path is
+// reported, the remaining drafts are still removed, and an
+// already-missing draft counts as removed (never a failure).
+func TestRollbackCreated(t *testing.T) {
+	dir := t.TempDir()
+
+	removable := filepath.Join(dir, "a.json")
+	if err := os.WriteFile(removable, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(dir, "b.json") // never written: counts as removed
+	// A non-empty directory is not removable by os.Remove: the blocked
+	// draft of the rollback.
+	blocked := filepath.Join(dir, "c.json")
+	if err := os.MkdirAll(filepath.Join(blocked, "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, failures := rollbackCreated([]*Draft{
+		{Path: removable},
+		{Path: gone},
+		{Path: blocked},
+	})
+	if removed != 2 {
+		t.Errorf("removed = %d, want 2 (the real file and the already-missing draft)", removed)
+	}
+	if len(failures) != 1 {
+		t.Fatalf("failures = %v, want exactly the blocked path", failures)
+	}
+	if !strings.Contains(failures[0], blocked) {
+		t.Errorf("failure %q must name the blocked path %s", failures[0], blocked)
+	}
+	// The removable file is gone (the loop continued past the blocked
+	// draft) and the blocked path remains.
+	if _, err := os.Stat(removable); !os.IsNotExist(err) {
+		t.Errorf("draft %s must be removed, stat err = %v", removable, err)
+	}
+	if _, err := os.Stat(blocked); err != nil {
+		t.Errorf("the blocked path %s must remain (not removable): %v", blocked, err)
+	}
+}
+
 // --- PublishBatch ------------------------------------------------------
 
 // TestPublishBatchTopologicalOrder: the planning-unit batch is
@@ -251,9 +294,10 @@ func TestPublishBatchCycleRefusal(t *testing.T) {
 	if got := strings.Join(ce.Drafts, ","); got != "sto:a,sto:b" {
 		t.Errorf("cycle members = %q, want sto:a,sto:b", got)
 	}
-	// A refused run publishes nothing (res is nil: pre-flight refusal).
-	if res != nil && len(res.Published) != 0 {
-		t.Errorf("Published = %d, want 0 (nothing before the refusal)", len(res.Published))
+	// A refused run publishes nothing; the result is never nil (the
+	// documented non-nil contract of PublishBatchResult).
+	if res == nil || len(res.Published) != 0 {
+		t.Errorf("res = %+v, want non-nil with Published empty (nothing before the refusal)", res)
 	}
 }
 
@@ -302,9 +346,10 @@ func TestPublishBatchUnresolvedRefusal(t *testing.T) {
 	if ue.Draft != "sto:dangling" || ue.Target != "ctr:ghost" {
 		t.Errorf("unresolved = draft %q target %q, want sto:dangling / ctr:ghost", ue.Draft, ue.Target)
 	}
-	// A refused run publishes nothing (res is nil: pre-flight refusal).
-	if res != nil && len(res.Published) != 0 {
-		t.Errorf("Published = %d, want 0", len(res.Published))
+	// A refused run publishes nothing; the result is never nil (the
+	// documented non-nil contract of PublishBatchResult).
+	if res == nil || len(res.Published) != 0 {
+		t.Errorf("res = %+v, want non-nil with Published empty", res)
 	}
 }
 

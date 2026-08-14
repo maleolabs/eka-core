@@ -128,20 +128,41 @@ func (AuthoringService) NewDraftBatch(rt *Runtime, req NewDraftBatchRequest) (*N
 			Relationships: d.Relationships,
 		}, d.Content)
 		if err != nil {
-			// All-or-nothing: remove the drafts this run created
-			// (best-effort; the original error is the verdict).
-			for _, c := range created {
-				if rerr := os.Remove(c.Path); rerr != nil && !os.IsNotExist(rerr) {
-					return nil, fmt.Errorf("authoring: batch draft %d of %d (%s:%s) cannot be scaffolded: %v; additionally the rollback of draft %s failed: %v",
-						i+1, len(req.Drafts), d.Type, d.ID, err, c.Path, rerr)
-				}
+			// All-or-nothing: remove EVERY draft this run created. A
+			// removal failure never stops the rollback — every created
+			// draft is attempted and the refusal reports the accurate
+			// counts plus the paths that could not be removed.
+			removed, failures := rollbackCreated(created)
+			if len(failures) > 0 {
+				return nil, fmt.Errorf("authoring: batch draft %d of %d (%s:%s) cannot be scaffolded: %v; rollback removed %d of %d created draft(s) but could not remove %s",
+					i+1, len(req.Drafts), d.Type, d.ID, err, removed, len(created), strings.Join(failures, "; "))
 			}
 			return nil, fmt.Errorf("authoring: batch draft %d of %d (%s:%s) cannot be scaffolded: %v; the %d draft(s) created by this run were removed",
-				i+1, len(req.Drafts), d.Type, d.ID, err, len(created))
+				i+1, len(req.Drafts), d.Type, d.ID, err, removed)
 		}
 		created = append(created, draft)
 	}
 	return &NewDraftBatchResult{Created: created}, nil
+}
+
+// rollbackCreated removes every draft a refused batch run created,
+// best-effort (the refusal is the verdict): the loop CONTINUES across
+// all created drafts even when individual removals fail, so a failed
+// removal never leaves the remaining drafts behind unmentioned. An
+// already-missing draft counts as removed (the file was never written
+// or a concurrent actor removed it). It returns the number of drafts
+// that are no longer present and the deterministic failure descriptions
+// ("path: error") of the ones that could not be removed, in creation
+// order.
+func rollbackCreated(created []*Draft) (removed int, failures []string) {
+	for _, c := range created {
+		if rerr := os.Remove(c.Path); rerr != nil && !os.IsNotExist(rerr) {
+			failures = append(failures, fmt.Sprintf("%s: %v", c.Path, rerr))
+			continue
+		}
+		removed++
+	}
+	return removed, failures
 }
 
 // --- PublishBatch ------------------------------------------------------
@@ -158,9 +179,19 @@ type PublishBatchOptions struct {
 // PublishBatchResult reports one batch publish run.
 type PublishBatchResult struct {
 	// Published lists the successful publishes in topological order.
-	// Empty when the run published nothing (no pending drafts, or the
-	// run refused before publishing).
+	// The result is never nil: Published is empty when the run
+	// published nothing (no pending drafts, a pre-flight refusal, or an
+	// error before the first publish) and carries the publishes
+	// completed before a mid-run failure.
 	Published []*PublishResult
+}
+
+// newPublishBatchResult returns the never-nil empty batch result every
+// error path of PublishBatch returns alongside its error (the
+// documented non-nil contract of PublishBatchResult, so callers never
+// nil-check).
+func newPublishBatchResult() *PublishBatchResult {
+	return &PublishBatchResult{Published: []*PublishResult{}}
 }
 
 // BatchCycleError reports that the pending draft graph cannot be
@@ -232,18 +263,18 @@ func (e *BatchUnresolvedError) Error() string {
 func (AuthoringService) PublishBatch(rt *Runtime, opts PublishBatchOptions) (*PublishBatchResult, error) {
 	st, err := rt.requireStore()
 	if err != nil {
-		return nil, err
+		return newPublishBatchResult(), err
 	}
 	project := opts.Project
 	if project == "" {
 		project = cwdProjectOf(rt)
 	}
 	if project == "" {
-		return nil, fmt.Errorf("publish: cannot resolve a project; run inside a registered repository")
+		return newPublishBatchResult(), fmt.Errorf("publish: cannot resolve a project; run inside a registered repository")
 	}
 	drafts, err := Authoring.Drafts(rt, project)
 	if err != nil {
-		return nil, fmt.Errorf("publish: %w", err)
+		return newPublishBatchResult(), fmt.Errorf("publish: %w", err)
 	}
 	if len(drafts) == 0 {
 		// An empty backlog is a valid no-op, not a refusal.
@@ -257,14 +288,14 @@ func (AuthoringService) PublishBatch(rt *Runtime, opts PublishBatchOptions) (*Pu
 	for _, d := range drafts {
 		a, err := conformance.ScanFile(d.Path)
 		if err != nil {
-			return nil, fmt.Errorf("publish: draft %s:%s cannot be read for batch ordering: %w", d.Type, d.ID, err)
+			return newPublishBatchResult(), fmt.Errorf("publish: draft %s:%s cannot be read for batch ordering: %w", d.Type, d.ID, err)
 		}
 		if a == nil {
-			return nil, fmt.Errorf("publish: draft %s:%s is not a knowledge artifact (missing type/id frontmatter)", d.Type, d.ID)
+			return newPublishBatchResult(), fmt.Errorf("publish: draft %s:%s is not a knowledge artifact (missing type/id frontmatter)", d.Type, d.ID)
 		}
 		key := batchKey(a.Namespace, a.Type, a.ID)
 		if _, dup := nodes[key]; dup {
-			return nil, fmt.Errorf("publish: drafts in project %s share the identity %s", project, key)
+			return newPublishBatchResult(), fmt.Errorf("publish: drafts in project %s share the identity %s", project, key)
 		}
 		nodes[key] = &batchNode{draft: d, artifact: a, deps: map[string]bool{}}
 	}
@@ -277,7 +308,7 @@ func (AuthoringService) PublishBatch(rt *Runtime, opts PublishBatchOptions) (*Pu
 			for _, raw := range node.artifact.Relations[field] {
 				ref, perr := conformance.ParseReference(raw, node.artifact.Namespace, node.artifact.Type)
 				if perr != nil {
-					return nil, &BatchUnresolvedError{Draft: node.artifact.Type + ":" + node.artifact.ID, Target: raw, Detail: perr.Error()}
+					return newPublishBatchResult(), &BatchUnresolvedError{Draft: node.artifact.Type + ":" + node.artifact.ID, Target: raw, Detail: perr.Error()}
 				}
 				key := batchKey(ref.Namespace, ref.Type, ref.ID)
 				if ref.Namespace == node.artifact.Namespace && ref.Type == node.artifact.Type && ref.ID == node.artifact.ID {
@@ -295,11 +326,11 @@ func (AuthoringService) PublishBatch(rt *Runtime, opts PublishBatchOptions) (*Pu
 				// line check — exact-instance semantics stay Publish's).
 				units, uerr := st.UnitsByLine(ref.Namespace, ref.Type, ref.ID)
 				if uerr != nil {
-					return nil, fmt.Errorf("publish: cannot check reference %q of draft %s against the store: %w",
+					return newPublishBatchResult(), fmt.Errorf("publish: cannot check reference %q of draft %s against the store: %w",
 						raw, node.artifact.Type+":"+node.artifact.ID, uerr)
 				}
 				if len(units) == 0 {
-					return nil, &BatchUnresolvedError{Draft: node.artifact.Type + ":" + node.artifact.ID, Target: raw}
+					return newPublishBatchResult(), &BatchUnresolvedError{Draft: node.artifact.Type + ":" + node.artifact.ID, Target: raw}
 				}
 			}
 		}
@@ -307,7 +338,7 @@ func (AuthoringService) PublishBatch(rt *Runtime, opts PublishBatchOptions) (*Pu
 
 	order, err := batchTopoOrder(nodes)
 	if err != nil {
-		return nil, err
+		return newPublishBatchResult(), err
 	}
 
 	result := &PublishBatchResult{Published: []*PublishResult{}}
