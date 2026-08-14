@@ -1,0 +1,38 @@
+{
+  "namespace": "eka-valid-fixture",
+  "type": "ctr",
+  "id": "gelombang-1",
+  "instanceVersion": 1,
+  "revision": 1,
+  "author": "Engineering Architecture",
+  "created": "2026-08-05",
+  "updated": "2026-08-05",
+  "state": {
+    "containerState": "active",
+    "existenceState": "active"
+  },
+  "relationships": {
+    "derivesFrom": []
+  },
+  "changeLog": [
+    {
+      "date": "2026-08-05",
+      "domain": "existenceState",
+      "from": "-",
+      "to": "active",
+      "by": "Engineering Architecture"
+    },
+    {
+      "date": "2026-08-05",
+      "domain": "containerState",
+      "from": "-",
+      "to": "active",
+      "by": "Engineering Architecture"
+    }
+  ],
+  "content": {
+    "objective": "Objective body.",
+    "workItems": "> Generated \u2014 State Projection. Do NOT edit state here; refresh on read.\n\n| Work Item | Ringkasan | Execution State |\n|---|---|---|\n| sto:login-email | login pakai email | in-progress |\n",
+    "changeLog": "- container dibuka."
+  }
+}

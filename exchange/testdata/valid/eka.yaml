@@ -1,0 +1,4 @@
+version: 1
+project: eka-valid-fixture
+name: valid
+namespace: eka-valid-fixture

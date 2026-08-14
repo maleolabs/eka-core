@@ -1,0 +1,47 @@
+{
+  "namespace": "eka-valid-fixture",
+  "type": "adr",
+  "id": "001-login-serialization",
+  "instanceVersion": 1,
+  "revision": 1,
+  "author": "Engineering Architecture",
+  "created": "2026-08-05",
+  "updated": "2026-08-05",
+  "state": {
+    "contentState": "accepted",
+    "existenceState": "active"
+  },
+  "dimension": "decisions",
+  "dimensionsSecondary": [],
+  "relationships": {
+    "supersedes": [],
+    "derivesFrom": [],
+    "dependsOn": []
+  },
+  "changeLog": [
+    {
+      "date": "2026-08-05",
+      "domain": "existenceState",
+      "from": "-",
+      "to": "active",
+      "by": "Engineering Architecture"
+    },
+    {
+      "date": "2026-08-05",
+      "domain": "contentState",
+      "from": "proposed",
+      "to": "accepted",
+      "by": "Engineering Architecture"
+    }
+  ],
+  "content": {
+    "context": "Context body.",
+    "decision": "Decision body.",
+    "consequences": "Consequences body.",
+    "alternativesConsidered": {
+      "sqlite": "SQLite index.",
+      "pebble": "Pebble store."
+    },
+    "references": "Extra section keys are allowed."
+  }
+}

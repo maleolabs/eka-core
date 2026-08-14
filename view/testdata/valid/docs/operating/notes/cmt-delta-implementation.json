@@ -1,0 +1,61 @@
+{
+  "namespace": "eka-view-fixture",
+  "type": "cmt",
+  "id": "delta-implementation",
+  "instanceVersion": 1,
+  "revision": 1,
+  "author": "Engineering Architecture",
+  "created": "2026-08-05",
+  "updated": "2026-08-05",
+  "domain": "Execution",
+  "state": {
+    "contentState": "draft",
+    "existenceState": "active",
+    "noteState": "resolved"
+  },
+  "relationships": {
+    "discusses": [
+      "eka-view-fixture/bug:delta"
+    ]
+  },
+  "changeLog": [
+    {
+      "date": "2026-08-05",
+      "domain": "contentState",
+      "from": "-",
+      "to": "draft",
+      "by": "Engineering Architecture"
+    },
+    {
+      "date": "2026-08-05",
+      "domain": "existenceState",
+      "from": "-",
+      "to": "active",
+      "by": "Engineering Architecture"
+    },
+    {
+      "date": "2026-08-05",
+      "domain": "noteState",
+      "from": "-",
+      "to": "open",
+      "by": "Engineering Architecture"
+    },
+    {
+      "date": "2026-08-05",
+      "domain": "noteState",
+      "from": "open",
+      "to": "resolved",
+      "by": "Engineering Architecture"
+    }
+  ],
+  "content": {
+    "role": "implementation",
+    "summary": "The delta bug fix is implemented.",
+    "changes": [
+      "delta flow fixed"
+    ],
+    "tests": [
+      "delta regression corpus"
+    ]
+  }
+}

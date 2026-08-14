@@ -1,0 +1,4 @@
+version: 1
+project: eka-invalid-fixture
+name: invalid
+namespace: eka-invalid-fixture

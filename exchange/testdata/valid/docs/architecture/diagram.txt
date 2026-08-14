@@ -1,0 +1,4 @@
+Exchange package fixture: architecture diagram placeholder.
+
+This non-markdown file under docs/ is carried as an attachment
+with Attachment ID docs/architecture/diagram.txt.

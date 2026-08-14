@@ -1,0 +1,19 @@
+{
+  "namespace": "eka-valid-fixture",
+  "type": "tkt",
+  "id": "sto-login-email",
+  "instanceVersion": 1,
+  "revision": 1,
+  "author": "Engineering Architecture",
+  "created": "2026-08-05",
+  "updated": "2026-08-05",
+  "relationships": {
+    "derivesFrom": [
+      "ctr:gelombang-1"
+    ]
+  },
+  "content": {
+    "commands": "> Generated \u2014 State Projection. Do NOT edit state here; refresh on read.\n\n- `eka view ticket tkt-sto-login-email` \u2014 render this projection.\n- `eka export sto:login-email` \u2014 export the work item as an exchange unit.\n",
+    "projectedStatus": "Projected from `sto:login-email` (owner state, read on refresh): **in-progress**."
+  }
+}
