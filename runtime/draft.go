@@ -224,6 +224,54 @@ func parseDraftTarget(target string) (conformance.Reference, error) {
 	return ref, nil
 }
 
+// draftExists reports whether a draft of the given identity exists in
+// the project's drafts directory — the "is a draft" test shared with
+// the note subject tolerance (runtime/note.go): the v2.0 JSON draft
+// file <workspace>/drafts/<project>/<type>-<id>.json, or the legacy
+// .md form. project "" scans every project's drafts (the
+// resolveDraftFile cross-project fallback semantics: a draft visible
+// in `eka draft list` is a draft).
+func draftExists(ws *workspace.Workspace, project, typeToken, id string) bool {
+	if project != "" {
+		return draftExistsIn(draftsRoot(ws), project, typeToken, id)
+	}
+	entries, err := os.ReadDir(draftsRoot(ws))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && draftExistsIn(draftsRoot(ws), e.Name(), typeToken, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// draftExistsIn checks one project's drafts directory for the draft
+// file (v2.0 JSON, or the legacy .md form that stays addressable).
+func draftExistsIn(root, project, typeToken, id string) bool {
+	dir := filepath.Join(root, project)
+	if _, err := os.Stat(filepath.Join(dir, typeToken+"-"+id+".json")); err == nil {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(dir, typeToken+"-"+id+".md")); err == nil {
+		return true
+	}
+	return false
+}
+
+// draftTargetOf returns the CKO draft-target callback for one project
+// ("" = every project): Rule 5's draft target tolerance — a reference
+// to a line whose only existence is a draft of the project is an
+// allowed draft-to-draft authoring reference, so the validator emits
+// no finding for it. The versioned-reference guard lives in the rule
+// engine (drafts never carry instance versions).
+func draftTargetOf(ws *workspace.Workspace, project string) func(ref conformance.Reference) bool {
+	return func(ref conformance.Reference) bool {
+		return draftExists(ws, project, ref.Type, ref.ID)
+	}
+}
+
 // cwdProjectOf resolves the project owning the repository registered
 // at the current working directory ("" when the cwd is not inside a
 // registered repository — the caller then falls back to scanning every
@@ -738,6 +786,10 @@ func (AuthoringService) Publish(rt *Runtime, target string, opts PublishOptions)
 	resolver := newStoreResolver(st)
 	report, err := conformance.ValidateCKO(u, conformance.ValidateCKOOptions{
 		Resolve: resolver.Resolve,
+		// Draft target tolerance: a reference whose target exists
+		// only as a draft of this project is an allowed
+		// draft-to-draft authoring reference (Rule 5).
+		Draft: draftTargetOf(ws, df.Project),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("publish: validation failed: %w", err)
@@ -1034,7 +1086,8 @@ type inlineCKO struct {
 func (AuthoringService) PublishInline(rt *Runtime, input []byte, opts PublishOptions) (*PublishResult, error) {
 	// The workspace must exist: the inline path persists into the
 	// canonical store, and requireWorkspace is the initialization gate.
-	if _, err := rt.requireWorkspace(); err != nil {
+	ws, err := rt.requireWorkspace()
+	if err != nil {
 		return nil, err
 	}
 	st, err := rt.requireStore()
@@ -1127,6 +1180,10 @@ func (AuthoringService) PublishInline(rt *Runtime, input []byte, opts PublishOpt
 	resolver := newStoreResolver(st)
 	report, err := conformance.ValidateCKO(u, conformance.ValidateCKOOptions{
 		Resolve: resolver.Resolve,
+		// Draft target tolerance: the inline input has no project
+		// scope, so any project's draft of the target line counts
+		// (the resolveDraftFile cross-project fallback semantics).
+		Draft: draftTargetOf(ws, ""),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("publish: validation failed: %w", err)
@@ -1324,6 +1381,10 @@ func (AuthoringService) ValidateDraft(rt *Runtime, target string, projectHint st
 	resolver := newStoreResolver(st)
 	report, err := conformance.ValidateCKO(u, conformance.ValidateCKOOptions{
 		Resolve: resolver.Resolve,
+		// Draft target tolerance: a reference whose target exists
+		// only as a draft of this project is an allowed
+		// draft-to-draft authoring reference (Rule 5).
+		Draft: draftTargetOf(ws, df.Project),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("validate draft: %w", err)

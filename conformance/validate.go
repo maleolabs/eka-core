@@ -203,6 +203,14 @@ type engine struct {
 	// nil (the repository Validate path), Rule 5 resolves against the
 	// engine's own artifact index.
 	ckoResolve func(ref Reference) bool
+	// draftRef is the CKO-mode draft-target callback: reports whether
+	// an unresolved reference target exists as a draft (an unpublished
+	// authoring object) of the same project. Rule 5 consults it after
+	// resolution fails: a line-level reference whose target is a draft
+	// is an allowed draft-to-draft authoring reference and produces no
+	// finding. Nil = no draft knowledge (every unresolved reference is
+	// reported).
+	draftRef func(ref Reference) bool
 }
 
 // identityKey builds the identity line key for the index.
