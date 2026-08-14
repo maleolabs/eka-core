@@ -183,6 +183,60 @@ func TestNewDraftValidation(t *testing.T) {
 	}
 }
 
+// TestNewDraftPhaseChangeLogEntry: a scaffolded draft carrying a phase
+// covers the phase context with a change-log entry ("-" -> the given
+// value, by the author, same date as the state entries) — rule 7
+// requires a change-log entry for every field with a change-log domain,
+// so a plan draft scaffolded with --phase must validate clean without
+// edits (R6 is orthogonal: knowledge artifacts need --dimension).
+func TestNewDraftPhaseChangeLogEntry(t *testing.T) {
+	r, project := draftRuntime(t)
+	d, err := Authoring.NewDraft(r, NewDraftRequest{
+		Project:   project,
+		Namespace: "feather",
+		Type:      "plan",
+		ID:        "roadmap-v2",
+		Dimension: "planning",
+		Phase:     "mvp",
+		By:        conformance.User("Ada Lovelace"),
+	})
+	if err != nil {
+		t.Fatalf("NewDraft: %v", err)
+	}
+	data, err := os.ReadFile(d.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		`"phase": "mvp"`, // the phase field itself
+		// The phase change-log entry, scaffolded alongside the field.
+		`"domain": "phase"`,
+		`"from": "-"`,
+		`"to": "mvp"`,
+		`"by": "Ada Lovelace"`,
+		// The owned-domain entries stay.
+		`"domain": "contentState"`,
+		`"domain": "planningState"`,
+		`"domain": "existenceState"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("draft template missing %q:\n%s", want, text)
+		}
+	}
+	// R7: the change-log covers the phase context, so the scaffolded
+	// draft validates clean — the acceptance criterion (`eka new
+	// plan:x --phase mvp`, then `eka draft validate` passes).
+	dv, err := Authoring.ValidateDraft(r, "feather/plan:roadmap-v2", "")
+	if err != nil {
+		t.Fatalf("ValidateDraft: %v", err)
+	}
+	if !dv.Report.Pass() {
+		t.Errorf("a phase-carrying scaffolded draft must validate clean, got %d errors: %+v",
+			dv.Report.ErrorCount(), dv.Report.SortedResults())
+	}
+}
+
 // TestNewDraftCollision: a second draft with the same project/type/id
 // is refused.
 func TestNewDraftCollision(t *testing.T) {
