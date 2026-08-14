@@ -1563,6 +1563,36 @@ func TestValidateDraftDraftToDraftTargetTolerance(t *testing.T) {
 	}
 }
 
+// TestValidateDraftDraftTargetCrossNamespaceNotTolerated: the draft
+// target tolerance is same-namespace-only — a cross-namespace
+// reference is never tolerated, even when a same-named draft file
+// exists under the project (the file's frontmatter namespace decides;
+// without the check the wrong-namespace reference would pass as
+// draft-to-draft and publish as a dangling reference).
+func TestValidateDraftDraftTargetCrossNamespaceNotTolerated(t *testing.T) {
+	r, project := draftRuntime(t)
+	// Draft B exists in the project, but under namespace feather; A
+	// references it under the WRONG namespace (other/sto:b): the
+	// draft file cannot verify the referenced line, so R5 flags.
+	newSTODraft(t, r, project, "feather", "b", nil)
+	newSTODraft(t, r, project, "feather", "a",
+		[]exchange.Relationship{{Type: "depends-on", Target: "other/sto:b"}})
+
+	dv, err := Authoring.ValidateDraft(r, "feather/sto:a", "")
+	if err != nil {
+		t.Fatalf("ValidateDraft: %v", err)
+	}
+	found := false
+	for _, res := range dv.Report.Results {
+		if res.Rule == "R5" && strings.Contains(res.Message, "other/sto:b") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a cross-namespace reference to a draft file must still flag R5: %+v", dv.Report.SortedResults())
+	}
+}
+
 // --- Container lifecycle (protocol §4, Option B) -----------------------
 
 // TestNewDraftContainerRequiresPlan: a ctr- draft without a depends-on

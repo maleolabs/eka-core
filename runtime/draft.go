@@ -224,51 +224,69 @@ func parseDraftTarget(target string) (conformance.Reference, error) {
 	return ref, nil
 }
 
-// draftExists reports whether a draft of the given identity exists in
-// the project's drafts directory — the "is a draft" test shared with
-// the note subject tolerance (runtime/note.go): the v2.0 JSON draft
-// file <workspace>/drafts/<project>/<type>-<id>.json, or the legacy
-// .md form. project "" scans every project's drafts (the
-// resolveDraftFile cross-project fallback semantics: a draft visible
-// in `eka draft list` is a draft).
-func draftExists(ws *workspace.Workspace, project, typeToken, id string) bool {
+// draftExists reports whether a draft of the given identity and
+// namespace exists in the project's drafts directory — the "is a
+// draft" test of the draft-target tolerance: the v2.0 JSON draft file
+// <workspace>/drafts/<project>/<type>-<id>.json (or the legacy .md
+// form) whose frontmatter namespace equals ns. The namespace
+// verification keeps the tolerance same-namespace-only: a
+// cross-namespace reference is never tolerated, even when a same-named
+// draft file exists under the project. project "" scans every
+// project's drafts (the resolveDraftFile cross-project fallback
+// semantics: a draft visible in `eka draft list` is a draft).
+func draftExists(ws *workspace.Workspace, project, ns, typeToken, id string) bool {
 	if project != "" {
-		return draftExistsIn(draftsRoot(ws), project, typeToken, id)
+		return draftExistsIn(draftsRoot(ws), project, ns, typeToken, id)
 	}
 	entries, err := os.ReadDir(draftsRoot(ws))
 	if err != nil {
 		return false
 	}
 	for _, e := range entries {
-		if e.IsDir() && draftExistsIn(draftsRoot(ws), e.Name(), typeToken, id) {
+		if e.IsDir() && draftExistsIn(draftsRoot(ws), e.Name(), ns, typeToken, id) {
 			return true
 		}
 	}
 	return false
 }
 
-// draftExistsIn checks one project's drafts directory for the draft
-// file (v2.0 JSON, or the legacy .md form that stays addressable).
-func draftExistsIn(root, project, typeToken, id string) bool {
+// draftExistsIn checks one project's drafts directory: the draft file
+// (v2.0 JSON, or the legacy .md form that stays addressable) whose
+// frontmatter namespace equals ns. A file that fails the structural
+// classification cannot verify the namespace and counts as absent
+// (conservative: the reference keeps flagging).
+func draftExistsIn(root, project, ns, typeToken, id string) bool {
 	dir := filepath.Join(root, project)
-	if _, err := os.Stat(filepath.Join(dir, typeToken+"-"+id+".json")); err == nil {
-		return true
-	}
-	if _, err := os.Stat(filepath.Join(dir, typeToken+"-"+id+".md")); err == nil {
-		return true
+	for _, name := range []string{typeToken + "-" + id + ".json", typeToken + "-" + id + ".md"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		// The frontmatter namespace decides (file names carry no
+		// namespace): a draft whose namespace differs from the
+		// reference's is not the referenced line.
+		a, err := conformance.ScanFile(path)
+		if err == nil && a != nil && a.Namespace == ns {
+			return true
+		}
 	}
 	return false
 }
 
 // draftTargetOf returns the CKO draft-target callback for one project
 // ("" = every project): Rule 5's draft target tolerance — a reference
-// to a line whose only existence is a draft of the project is an
-// allowed draft-to-draft authoring reference, so the validator emits
-// no finding for it. The versioned-reference guard lives in the rule
-// engine (drafts never carry instance versions).
+// to a line whose only existence is a draft of the project, with the
+// SAME namespace, is an allowed draft-to-draft authoring reference, so
+// the validator emits no finding for it. Cross-namespace references
+// are never tolerated (a same-named draft file under another namespace
+// is not the referenced line). The versioned-reference guard lives in
+// the rule engine (drafts never carry instance versions).
 func draftTargetOf(ws *workspace.Workspace, project string) func(ref conformance.Reference) bool {
 	return func(ref conformance.Reference) bool {
-		return draftExists(ws, project, ref.Type, ref.ID)
+		if ref.Namespace == "" {
+			return false
+		}
+		return draftExists(ws, project, ref.Namespace, ref.Type, ref.ID)
 	}
 }
 
