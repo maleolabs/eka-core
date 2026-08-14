@@ -21,7 +21,9 @@ import (
 // This file implements the `eka transition` side of the Authoring API
 // (ADR-019 D2, revised per implementation feedback): the structured,
 // non-interactive way to move a work item along the D1 transition
-// table.
+// table, a plan along the planning-state table, a container along the
+// container-state table, or a knowledge artifact along the
+// content-state lifecycle.
 //
 // Revised model (documented deviation): transitions operate on the
 // WORKSPACE, never on the repository docs tree — the docs tree is the
@@ -49,7 +51,10 @@ type TransitionRequest struct {
 	// must equal the repository namespace) or "<type>:<id>"
 	// (unqualified — the repository namespace applies).
 	Target string
-	// To is the explicit destination execution-state value (D1 table).
+	// To is the explicit destination state value of the target's
+	// transition domain (the D1 table for work items, the
+	// planning-state table for plans, the container-state table for
+	// containers, the content-state lifecycle for knowledge artifacts).
 	// Exactly one of To / Forward / Backward must be set.
 	To string
 	// Forward requests the next step of the D1 table from the current
@@ -210,8 +215,8 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 	if ref.HasVersion {
 		return nil, fmt.Errorf("transition: %s is a canonical published form; transition addresses the work item line", req.Target) // Exit 2.
 	}
-	if !conformance.IsWorkItemType(ref.Type) && ref.Type != "plan" && ref.Type != "ctr" {
-		return nil, fmt.Errorf("transition: %s is not transitionable (work items sto/ts/bug/td/ch/spk, plans plan-, containers ctr-)", req.Target) // Exit 2.
+	if !conformance.IsWorkItemType(ref.Type) && ref.Type != "plan" && ref.Type != "ctr" && !ownsContentState(ref.Type) {
+		return nil, fmt.Errorf("transition: %s is not transitionable (work items sto/ts/bug/td/ch/spk, plans plan-, containers ctr-, knowledge artifacts with content-state)", req.Target) // Exit 2.
 	}
 	if ref.Namespace != "" && ref.Namespace != meta.Namespace {
 		return nil, fmt.Errorf("transition: target namespace %s differs from the repository namespace %s; cross-platform access is read-only",
@@ -245,7 +250,15 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 	// execution-state (the D1 table), plans own planning-state (draft
 	// -> approved; immutable is the container lock), containers own
 	// container-state (active -> completed, gated on the all-done
-	// membership rule).
+	// membership rule), knowledge artifacts own content-state (the
+	// content-maturity lifecycle of the type's variant). Disambiguation
+	// is by target type: "approved" is a planning-state destination on
+	// plan- and a content-state destination on knowledge artifacts, and
+	// the target type selects the domain. plan- keeps planning-state as
+	// its sole transition domain (it carries the container-lock
+	// semantics); the plan's own content-state is out of scope for the
+	// transition API (planning-state approval expresses plan
+	// commitment).
 	typeWord := "work item"
 	stateDomain := conformance.DomainExecutionState
 	switch ref.Type {
@@ -255,6 +268,11 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 	case "ctr":
 		typeWord = "container"
 		stateDomain = conformance.DomainContainerState
+	default:
+		if ownsContentState(ref.Type) {
+			typeWord = "artifact"
+			stateDomain = conformance.DomainContentState
+		}
 	}
 
 	// The current state: the highest instance of the line (the line is
@@ -283,6 +301,8 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 		from = current.StateVector.PlanningState
 	case conformance.DomainContainerState:
 		from = current.StateVector.ContainerState
+	case conformance.DomainContentState:
+		from = current.StateVector.ContentState
 	}
 	if from == "" {
 		return nil, &TransitionRefusal{
@@ -291,13 +311,17 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 		}
 	}
 
-	// The planning-state / container-state branches (plan- and ctr-
-	// targets). Work items continue with the D1 pipeline below.
+	// The planning-state / container-state / content-state branches
+	// (plan-, ctr- and knowledge-artifact targets). Work items continue
+	// with the D1 pipeline below.
 	if ref.Type == "plan" {
 		return transitionPlanState(st, project, repo.Name, ref, current, from, req, byIdentity)
 	}
 	if ref.Type == "ctr" {
 		return transitionContainerState(st, project, repo.Name, ref, current, from, req, byIdentity)
+	}
+	if stateDomain == conformance.DomainContentState {
+		return transitionContentState(st, project, repo.Name, ref, current, from, req, byIdentity)
 	}
 
 	// Destination: explicit <to>, or the derived --forward/--backward
@@ -629,6 +653,141 @@ func transitionContainerState(st *store.Store, project, sourceRepo string, ref c
 	return publishStateTransition(st, project, sourceRepo, current, from, to, conformance.DomainContainerState, byIdentity)
 }
 
+// transitionContentState performs the content-state branch of the
+// transition pipeline (knowledge-artifact targets — every type that
+// owns content-state per Rule 4 except plan-, which keeps planning-state
+// as its transition domain): the content-maturity lifecycle of the
+// type's variant (standard draft -> review -> approved -> amended; ADR
+// proposed -> accepted -> superseded; decision draft -> accepted ->
+// superseded — conformance/state.go, the single source of the value
+// sets). The explicit table is the immediate next step of the variant
+// only (steps, not skips — the same convention as the plan and
+// container branches): a skip (e.g. draft -> approved on the standard
+// variant) is refused with the table message; a revert, a no-op or an
+// unknown destination refuses as forward-only (the same distinction the
+// container branch makes); terminal states (amended / superseded)
+// refuse everything. Forward-only: --backward refuses. Superseding an
+// ADR is gated on conformance R9: a replacement must reference the ADR
+// via `supersedes`. No note gates, no active-container confirmation
+// (those are work-item-only gates).
+func transitionContentState(st *store.Store, project, sourceRepo string, ref conformance.Reference, current *exchange.Unit, from string, req TransitionRequest, byIdentity conformance.AuthorIdentity) (*TransitionResult, error) {
+	values := conformance.DomainValues(conformance.DomainContentState, ref.Type)
+	to := req.To
+	if req.Forward || req.Backward {
+		if req.Backward {
+			return nil, &TransitionRefusal{
+				Reason: "content-state is forward-only",
+				Hint:   legalContentTransitionsHint(from, values),
+			}
+		}
+		if idx := valueIndex(values, from); idx < 0 || idx+1 >= len(values) {
+			return nil, &TransitionRefusal{
+				Reason: fmt.Sprintf("there is no forward transition from %q in the content-state table", from),
+				Hint:   legalContentTransitionsHint(from, values),
+			}
+		} else {
+			to = values[idx+1]
+		}
+	}
+	// The explicit table: from -> the immediate next value of the
+	// variant. A terminal state has no next value; a destination not
+	// ahead of the current value (a revert or a no-op) refuses as
+	// forward-only; an unknown value refuses with the table message.
+	fromIdx, toIdx := valueIndex(values, from), valueIndex(values, to)
+	if !(fromIdx >= 0 && toIdx == fromIdx+1) {
+		if fromIdx >= 0 && fromIdx == len(values)-1 {
+			return nil, &TransitionRefusal{
+				Reason: fmt.Sprintf("%s is terminal", from),
+				Hint:   legalContentTransitionsHint(from, values),
+			}
+		}
+		hint := legalContentTransitionsHint(from, values)
+		if toIdx < 0 {
+			return nil, &TransitionRefusal{
+				Reason: fmt.Sprintf("transition %s -> %s is not in the content-state table", from, to),
+				Hint:   hint,
+			}
+		}
+		if toIdx <= fromIdx {
+			return nil, &TransitionRefusal{
+				Reason: "content-state is forward-only",
+				Hint:   hint,
+			}
+		}
+		return nil, &TransitionRefusal{
+			Reason: fmt.Sprintf("transition %s -> %s is not in the content-state table", from, to),
+			Hint:   hint,
+		}
+	}
+
+	// Gate (conformance R9): a superseded ADR must be referenced by a
+	// replacement via `supersedes` — evaluated over the published units
+	// of the project (the successor set; a draft successor does not
+	// count until published). decision- supersession carries no gate
+	// (R9 applies to adr- only).
+	if ref.Type == "adr" && to == "superseded" && !hasSuperseder(st, project, ref, current.Identity.InstanceVersion) {
+		return nil, &TransitionRefusal{
+			Reason: fmt.Sprintf("transition gate R9: superseded ADR %s must be referenced by a replacement via `supersedes`",
+				ref.Namespace+"/"+ref.Type+":"+ref.ID),
+			Hint: "create the successor ADR with --supersedes <this target> and publish it first",
+		}
+	}
+	return publishStateTransition(st, project, sourceRepo, current, from, to, conformance.DomainContentState, byIdentity)
+}
+
+// ownsContentState reports whether the type token owns the
+// content-state domain (Rule 4): the knowledge artifacts plus rvw- and
+// cmt-. plan- also owns content-state but its transition domain is
+// planning-state (the dispatch never routes plan- here).
+func ownsContentState(typeToken string) bool {
+	for _, d := range conformance.OwnedDomains(typeToken) {
+		if d == conformance.DomainContentState {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSuperseder reports whether any OTHER unit of the project
+// references the target line via a `supersedes` relationship — the
+// conformance R9 replacement rule, evaluated over the workspace store
+// (the published successor set), mirroring the exact-instance
+// semantics of the conformance engine (rules.go R9): a versioned
+// reference counts only when its version equals the target's current
+// instance version; an unversioned reference always counts; the
+// target's own unit never counts against itself (b == a parity). A
+// store read failure is conservative: it never confirms a replacement.
+func hasSuperseder(st *store.Store, project string, target conformance.Reference, instanceVersion int) bool {
+	units, err := st.UnitsByProject(project)
+	if err != nil {
+		return false
+	}
+	targetLine := target.Namespace + "/" + target.Type + ":" + target.ID
+	for _, u := range units {
+		if u.Identity.Namespace == target.Namespace && u.Identity.Type == target.Type &&
+			u.Identity.ID == target.ID && u.Identity.InstanceVersion == instanceVersion {
+			continue // The target's own current instance never supersedes itself.
+		}
+		for _, rel := range u.Relationships {
+			if rel.Type != "supersedes" {
+				continue
+			}
+			ref, err := conformance.ParseReference(rel.Target, u.Identity.Namespace, u.Identity.Type)
+			if err != nil {
+				continue
+			}
+			if ref.Namespace+"/"+ref.Type+":"+ref.ID != targetLine {
+				continue
+			}
+			if ref.HasVersion && ref.Version != instanceVersion {
+				continue // A successor may only supersede the exact instance it replaces.
+			}
+			return true
+		}
+	}
+	return false
+}
+
 // otherActiveContainer returns the canonical line form of the smallest
 // OTHER active container line of the project (highest instance per
 // line — the byLine pattern of containerWorkItems; the target's own
@@ -711,6 +870,16 @@ func legalContainerTransitionsHint(from string) string {
 	return `no legal transition from "completed" (completed is terminal)`
 }
 
+// legalContentTransitionsHint renders the content-state destinations of
+// a state for the refusal hint: the immediate next step of the type's
+// variant table (steps, not skips), or the terminal notice.
+func legalContentTransitionsHint(from string, values []string) string {
+	if idx := valueIndex(values, from); idx >= 0 && idx+1 < len(values) {
+		return fmt.Sprintf("legal transitions from %q: %s", from, values[idx+1])
+	}
+	return fmt.Sprintf("no legal transition from %q (%s is terminal)", from, from)
+}
+
 // valueIndex returns the position of v in values, or -1.
 func valueIndex(values []string, v string) int {
 	for i, x := range values {
@@ -730,6 +899,8 @@ func publishStateTransition(st *store.Store, project, sourceRepo string, current
 	today := time.Now().Format("2006-01-02")
 	next := *current // shallow copy; the mutable slices below are rebuilt.
 	switch domain {
+	case conformance.DomainContentState:
+		next.StateVector.ContentState = to
 	case conformance.DomainPlanningState:
 		next.StateVector.PlanningState = to
 	case conformance.DomainContainerState:
