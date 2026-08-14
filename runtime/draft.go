@@ -224,6 +224,72 @@ func parseDraftTarget(target string) (conformance.Reference, error) {
 	return ref, nil
 }
 
+// draftExists reports whether a draft of the given identity and
+// namespace exists in the project's drafts directory — the "is a
+// draft" test of the draft-target tolerance: the v2.0 JSON draft file
+// <workspace>/drafts/<project>/<type>-<id>.json (or the legacy .md
+// form) whose frontmatter namespace equals ns. The namespace
+// verification keeps the tolerance same-namespace-only: a
+// cross-namespace reference is never tolerated, even when a same-named
+// draft file exists under the project. project "" scans every
+// project's drafts (the resolveDraftFile cross-project fallback
+// semantics: a draft visible in `eka draft list` is a draft).
+func draftExists(ws *workspace.Workspace, project, ns, typeToken, id string) bool {
+	if project != "" {
+		return draftExistsIn(draftsRoot(ws), project, ns, typeToken, id)
+	}
+	entries, err := os.ReadDir(draftsRoot(ws))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && draftExistsIn(draftsRoot(ws), e.Name(), ns, typeToken, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// draftExistsIn checks one project's drafts directory: the draft file
+// (v2.0 JSON, or the legacy .md form that stays addressable) whose
+// frontmatter namespace equals ns. A file that fails the structural
+// classification cannot verify the namespace and counts as absent
+// (conservative: the reference keeps flagging).
+func draftExistsIn(root, project, ns, typeToken, id string) bool {
+	dir := filepath.Join(root, project)
+	for _, name := range []string{typeToken + "-" + id + ".json", typeToken + "-" + id + ".md"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		// The frontmatter namespace decides (file names carry no
+		// namespace): a draft whose namespace differs from the
+		// reference's is not the referenced line.
+		a, err := conformance.ScanFile(path)
+		if err == nil && a != nil && a.Namespace == ns {
+			return true
+		}
+	}
+	return false
+}
+
+// draftTargetOf returns the CKO draft-target callback for one project
+// ("" = every project): Rule 5's draft target tolerance — a reference
+// to a line whose only existence is a draft of the project, with the
+// SAME namespace, is an allowed draft-to-draft authoring reference, so
+// the validator emits no finding for it. Cross-namespace references
+// are never tolerated (a same-named draft file under another namespace
+// is not the referenced line). The versioned-reference guard lives in
+// the rule engine (drafts never carry instance versions).
+func draftTargetOf(ws *workspace.Workspace, project string) func(ref conformance.Reference) bool {
+	return func(ref conformance.Reference) bool {
+		if ref.Namespace == "" {
+			return false
+		}
+		return draftExists(ws, project, ref.Namespace, ref.Type, ref.ID)
+	}
+}
+
 // cwdProjectOf resolves the project owning the repository registered
 // at the current working directory ("" when the cwd is not inside a
 // registered repository — the caller then falls back to scanning every
@@ -738,6 +804,10 @@ func (AuthoringService) Publish(rt *Runtime, target string, opts PublishOptions)
 	resolver := newStoreResolver(st)
 	report, err := conformance.ValidateCKO(u, conformance.ValidateCKOOptions{
 		Resolve: resolver.Resolve,
+		// Draft target tolerance: a reference whose target exists
+		// only as a draft of this project is an allowed
+		// draft-to-draft authoring reference (Rule 5).
+		Draft: draftTargetOf(ws, df.Project),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("publish: validation failed: %w", err)
@@ -1034,7 +1104,8 @@ type inlineCKO struct {
 func (AuthoringService) PublishInline(rt *Runtime, input []byte, opts PublishOptions) (*PublishResult, error) {
 	// The workspace must exist: the inline path persists into the
 	// canonical store, and requireWorkspace is the initialization gate.
-	if _, err := rt.requireWorkspace(); err != nil {
+	ws, err := rt.requireWorkspace()
+	if err != nil {
 		return nil, err
 	}
 	st, err := rt.requireStore()
@@ -1127,6 +1198,10 @@ func (AuthoringService) PublishInline(rt *Runtime, input []byte, opts PublishOpt
 	resolver := newStoreResolver(st)
 	report, err := conformance.ValidateCKO(u, conformance.ValidateCKOOptions{
 		Resolve: resolver.Resolve,
+		// Draft target tolerance: the inline input has no project
+		// scope, so any project's draft of the target line counts
+		// (the resolveDraftFile cross-project fallback semantics).
+		Draft: draftTargetOf(ws, ""),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("publish: validation failed: %w", err)
@@ -1324,6 +1399,10 @@ func (AuthoringService) ValidateDraft(rt *Runtime, target string, projectHint st
 	resolver := newStoreResolver(st)
 	report, err := conformance.ValidateCKO(u, conformance.ValidateCKOOptions{
 		Resolve: resolver.Resolve,
+		// Draft target tolerance: a reference whose target exists
+		// only as a draft of this project is an allowed
+		// draft-to-draft authoring reference (Rule 5).
+		Draft: draftTargetOf(ws, df.Project),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("validate draft: %w", err)

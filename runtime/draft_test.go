@@ -1508,6 +1508,91 @@ func TestValidateDraft(t *testing.T) {
 	}
 }
 
+// TestValidateDraftDraftToDraftTargetTolerance (fix-draft-reference
+// -tolerance): a draft referencing another draft (both unpublished,
+// same project) validates with NO R5 finding — the target-side draft
+// tolerance. sto- drafts own no content-state, so the source-side
+// content-state tolerance would not apply: this is the reported
+// regression (previously a hard R5 error). The tolerance is
+// target-specific (a reference to a truly missing line still flags
+// R5), and the publish gate shares it (draft A publishes while draft B
+// is still unpublished).
+func TestValidateDraftDraftToDraftTargetTolerance(t *testing.T) {
+	r, project := draftRuntime(t)
+	// Draft B exists only as a draft; draft A references it.
+	newSTODraft(t, r, project, "feather", "b", nil)
+	newSTODraft(t, r, project, "feather", "a",
+		[]exchange.Relationship{{Type: "depends-on", Target: "feather/sto:b"}})
+
+	dv, err := Authoring.ValidateDraft(r, "feather/sto:a", "")
+	if err != nil {
+		t.Fatalf("ValidateDraft: %v", err)
+	}
+	if !dv.Report.Pass() {
+		t.Errorf("a draft referencing another draft must validate, got %d errors: %+v",
+			dv.Report.ErrorCount(), dv.Report.SortedResults())
+	}
+	for _, res := range dv.Report.Results {
+		if res.Rule == "R5" {
+			t.Errorf("R5 finding on a draft-to-draft reference: %+v", res)
+		}
+	}
+
+	// The tolerance is target-specific: a reference to a truly
+	// missing line still flags R5.
+	newSTODraft(t, r, project, "feather", "c",
+		[]exchange.Relationship{{Type: "depends-on", Target: "feather/sto:missing"}})
+	dv, err = Authoring.ValidateDraft(r, "feather/sto:c", "")
+	if err != nil {
+		t.Fatalf("ValidateDraft: %v", err)
+	}
+	found := false
+	for _, res := range dv.Report.Results {
+		if res.Rule == "R5" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a reference to a truly missing line must still flag R5: %+v", dv.Report.SortedResults())
+	}
+
+	// The publish gate shares the pipeline: A publishes while B is
+	// still a draft.
+	if _, err := Authoring.Publish(r, "feather/sto:a", PublishOptions{}); err != nil {
+		t.Errorf("publish of a draft referencing a draft must succeed: %v", err)
+	}
+}
+
+// TestValidateDraftDraftTargetCrossNamespaceNotTolerated: the draft
+// target tolerance is same-namespace-only — a cross-namespace
+// reference is never tolerated, even when a same-named draft file
+// exists under the project (the file's frontmatter namespace decides;
+// without the check the wrong-namespace reference would pass as
+// draft-to-draft and publish as a dangling reference).
+func TestValidateDraftDraftTargetCrossNamespaceNotTolerated(t *testing.T) {
+	r, project := draftRuntime(t)
+	// Draft B exists in the project, but under namespace feather; A
+	// references it under the WRONG namespace (other/sto:b): the
+	// draft file cannot verify the referenced line, so R5 flags.
+	newSTODraft(t, r, project, "feather", "b", nil)
+	newSTODraft(t, r, project, "feather", "a",
+		[]exchange.Relationship{{Type: "depends-on", Target: "other/sto:b"}})
+
+	dv, err := Authoring.ValidateDraft(r, "feather/sto:a", "")
+	if err != nil {
+		t.Fatalf("ValidateDraft: %v", err)
+	}
+	found := false
+	for _, res := range dv.Report.Results {
+		if res.Rule == "R5" && strings.Contains(res.Message, "other/sto:b") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a cross-namespace reference to a draft file must still flag R5: %+v", dv.Report.SortedResults())
+	}
+}
+
 // --- Container lifecycle (protocol §4, Option B) -----------------------
 
 // TestNewDraftContainerRequiresPlan: a ctr- draft without a depends-on

@@ -164,7 +164,10 @@ func (e *engine) rule4(a *Artifact) {
 // Every reference in amends/supersedes/derives-from/depends-on/validates
 // must resolve to an existing artifact. Unresolved references on a
 // `content-state: draft` artifact are warnings; everywhere else they are
-// errors. Self-references are always errors.
+// errors. Self-references are always errors. In CKO mode (ValidateCKO),
+// an unresolved line-level reference whose target exists as a draft of
+// the same project (ValidateCKOOptions.Draft) is an allowed
+// draft-to-draft authoring reference and produces no finding at all.
 //
 // Reference grammar (validation.md Rule 5, docs/README.md):
 //
@@ -324,6 +327,16 @@ func (e *engine) rule5(a *Artifact) {
 				if e.resolveRef(ref) {
 					continue
 				}
+				// Draft target tolerance: the unresolved target
+				// exists as a draft (unpublished) of the same
+				// project — an authoring reference between drafts
+				// (the target publishes later), no finding.
+				// Versioned references name published instances
+				// (drafts never carry instance versions), so they
+				// are never tolerated.
+				if !ref.HasVersion && e.draftRef != nil && e.draftRef(ref) {
+					continue
+				}
 				if a.States[DomainContentState] == "draft" {
 					e.add(a, Rule5, SeverityWarning,
 						"unresolved reference %q in `%s` (allowed while content-state is draft)", raw, field)
@@ -335,6 +348,16 @@ func (e *engine) rule5(a *Artifact) {
 			}
 			target := e.resolve(ref)
 			if target == nil {
+				// Draft target tolerance (CKO mode only: the
+				// repository Validate path never sets draftRef):
+				// the unresolved target exists as a draft of the
+				// same project — an authoring reference between
+				// drafts, no finding. Versioned references name
+				// published instances (drafts never carry instance
+				// versions), so they are never tolerated.
+				if !ref.HasVersion && e.draftRef != nil && e.draftRef(ref) {
+					continue
+				}
 				if a.States[DomainContentState] == "draft" {
 					e.add(a, Rule5, SeverityWarning,
 						"unresolved reference %q in `%s` (allowed while content-state is draft)", raw, field)

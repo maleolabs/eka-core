@@ -57,6 +57,17 @@ func ckoValidate(t *testing.T, u *exchange.Unit, opts conformance.ValidateCKOOpt
 	return report
 }
 
+// countR5 counts the report's Rule 5 findings.
+func countR5(report *conformance.Report) int {
+	n := 0
+	for _, r := range report.Results {
+		if r.Rule == "R5" {
+			n++
+		}
+	}
+	return n
+}
+
 // TestValidateCKOValidUnitPasses: a well-formed canonical unit passes
 // CKO-level validation with zero findings.
 func TestValidateCKOValidUnitPasses(t *testing.T) {
@@ -152,6 +163,100 @@ func TestValidateCKOUnresolvedRelationshipDraftTolerance(t *testing.T) {
 	}
 	if report.WarningCount() != 1 {
 		t.Errorf("Warnings = %d, want exactly 1 (the draft-tolerance warning)", report.WarningCount())
+	}
+}
+
+// TestValidateCKOUnresolvedRelationshipDraftTargetTolerance: the CKO
+// path's draft TARGET tolerance — a line-level reference that does not
+// resolve but whose target exists as a draft (ValidateCKOOptions.Draft)
+// is an allowed draft-to-draft authoring reference: NO finding at all,
+// even on a NON-draft unit, where the source-side content-state
+// tolerance would not apply.
+func TestValidateCKOUnresolvedRelationshipDraftTargetTolerance(t *testing.T) {
+	u := ckoUnit("acme", "spec", "publish-api")
+	u.StateVector.ContentState = "approved"
+	u.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-07", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Engineering")},
+		{Date: "2026-08-07", Domain: "content-state", From: "draft", To: "approved", By: conformance.User("Engineering")},
+	}
+	u.Relationships = []exchange.Relationship{{Type: "depends-on", Target: "acme/sto:ghost"}}
+
+	report := ckoValidate(t, u, conformance.ValidateCKOOptions{
+		Resolve: nil,
+		Draft: func(ref conformance.Reference) bool {
+			return ref.Namespace == "acme" && ref.Type == "sto" && ref.ID == "ghost"
+		},
+	})
+	if !report.Pass() {
+		t.Errorf("a draft-target reference must not block, got %d errors: %+v", report.ErrorCount(), report.SortedResults())
+	}
+	if n := countR5(report); n != 0 {
+		t.Errorf("R5 findings = %d, want 0 (draft target tolerance): %+v", n, report.SortedResults())
+	}
+}
+
+// TestValidateCKOUnresolvedRelationshipDraftTargetAbsent: when the
+// draft callback reports the target is NOT a draft, an unresolved
+// reference on a non-draft unit remains a blocking R5 error — the
+// tolerance is target-specific (published objects referencing missing
+// targets still flag).
+func TestValidateCKOUnresolvedRelationshipDraftTargetAbsent(t *testing.T) {
+	u := ckoUnit("acme", "spec", "publish-api")
+	u.StateVector.ContentState = "approved"
+	u.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-07", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Engineering")},
+		{Date: "2026-08-07", Domain: "content-state", From: "draft", To: "approved", By: conformance.User("Engineering")},
+	}
+	u.Relationships = []exchange.Relationship{{Type: "depends-on", Target: "acme/sto:ghost"}}
+
+	report := ckoValidate(t, u, conformance.ValidateCKOOptions{
+		Draft: func(ref conformance.Reference) bool { return false },
+	})
+	if report.Pass() {
+		t.Error("an unresolved reference on a non-draft target must block")
+	}
+	found := false
+	for _, r := range report.Results {
+		if r.Rule == "R5" && r.Severity == conformance.SeverityError &&
+			strings.Contains(r.Message, "acme/sto:ghost") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("R5 unresolved-reference finding missing: %+v", report.SortedResults())
+	}
+}
+
+// TestValidateCKOUnresolvedRelationshipDraftTargetVersioned: a
+// versioned reference is a claim about a published instance — drafts
+// never carry instance versions — so the draft target tolerance does
+// not apply and the unresolved versioned reference stays an error.
+func TestValidateCKOUnresolvedRelationshipDraftTargetVersioned(t *testing.T) {
+	u := ckoUnit("acme", "spec", "publish-api")
+	u.StateVector.ContentState = "approved"
+	u.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-07", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Engineering")},
+		{Date: "2026-08-07", Domain: "content-state", From: "draft", To: "approved", By: conformance.User("Engineering")},
+	}
+	u.Relationships = []exchange.Relationship{{Type: "depends-on", Target: "acme/sto:ghost:1"}}
+
+	report := ckoValidate(t, u, conformance.ValidateCKOOptions{
+		Draft: func(ref conformance.Reference) bool {
+			return ref.Type == "sto" && ref.ID == "ghost"
+		},
+	})
+	if report.Pass() {
+		t.Error("a versioned reference to a draft line must block (drafts carry no instance versions)")
+	}
+	found := false
+	for _, r := range report.Results {
+		if r.Rule == "R5" && r.Severity == conformance.SeverityError &&
+			strings.Contains(r.Message, "acme/sto:ghost:1") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("R5 versioned unresolved-reference finding missing: %+v", report.SortedResults())
 	}
 }
 
