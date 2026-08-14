@@ -22,11 +22,6 @@ Two long-lived branches:
    the primary worktree stays isolated.
 3. **Merge to `main` via PR from `develop`.** Merging to `main` MUST come from
    the `develop` branch through a GitHub pull request.
-4. **Owner-only exception.** The project owner — git config `user.name`
-   **Marij Mokoginta** or email **marijmokoginta04@gmail.com** — MAY push
-   directly to `main` or open a PR from a non-`develop` branch. Everyone else
-   is strictly forbidden from direct `main` pushes and from non-`develop`
-   pull requests.
 
 ## Quality gate
 
