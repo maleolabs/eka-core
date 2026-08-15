@@ -46,6 +46,29 @@ func ckoUnit(ns, typ, id string) *exchange.Unit {
 	return u
 }
 
+// ckoWorkItem builds a valid work-item unit (sto, execution-state todo,
+// structured-text content with the required Description/Acceptance
+// Criteria sections): the CKO shape of a published work item line.
+func ckoWorkItem(ns, id string) *exchange.Unit {
+	u := &exchange.Unit{
+		Identity: exchange.Identity{Namespace: ns, Type: "sto", ID: id, InstanceVersion: 1},
+		Revision: 1,
+		StateVector: exchange.StateVector{
+			ExecutionState: "todo",
+			ExistenceState: "active",
+		},
+		ChangeLog: []exchange.ChangeLogEntry{
+			{Date: "2026-08-07", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Engineering")},
+			{Date: "2026-08-07", Domain: "execution-state", From: "-", To: "todo", By: conformance.User("Engineering")},
+		},
+		Relationships:  []exchange.Relationship{},
+		Content:        exchange.ContentRef{Representation: "eka/structured-text/1", File: "content"},
+		ContentPayload: []byte("# id\n\n## Description\n\nd\n\n## Acceptance Criteria\n\nc\n"),
+	}
+	u.CanonicalIdentityForm = u.Identity.CanonicalForm()
+	return u
+}
+
 // ckoValidate validates a unit and returns the report (fatal on a
 // validator error — the validator only errors on nil/malformed input).
 func ckoValidate(t *testing.T, u *exchange.Unit, opts conformance.ValidateCKOOptions) *conformance.Report {
@@ -224,6 +247,30 @@ func TestValidateCKOUnresolvedRelationshipDraftTargetAbsent(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("R5 unresolved-reference finding missing: %+v", report.SortedResults())
+	}
+}
+
+// TestValidateCKOAssignedToDraftTolerance: the assigned-to field rides
+// the shared R5 mechanics — an assigned-to target that exists as a
+// draft (unpublished) member line is the R5 draft-TARGET tolerance: NO
+// finding at all, even on a non-draft work item (a work item may point
+// at a draft member line, ADR-029 Decision 2). Work items own no
+// content-state, so the source-side content-state tolerance never
+// applies to them.
+func TestValidateCKOAssignedToDraftTolerance(t *testing.T) {
+	u := ckoWorkItem("acme", "login-email")
+	u.Relationships = []exchange.Relationship{{Type: "assigned-to", Target: "acme/mbr:ghost"}}
+
+	report := ckoValidate(t, u, conformance.ValidateCKOOptions{
+		Draft: func(ref conformance.Reference) bool {
+			return ref.Namespace == "acme" && ref.Type == "mbr" && ref.ID == "ghost"
+		},
+	})
+	if !report.Pass() {
+		t.Errorf("an assigned-to draft-target reference must not block, got %d errors: %+v", report.ErrorCount(), report.SortedResults())
+	}
+	if n := countR5(report); n != 0 {
+		t.Errorf("R5 findings = %d, want 0 (draft-target tolerance): %+v", n, report.SortedResults())
 	}
 }
 

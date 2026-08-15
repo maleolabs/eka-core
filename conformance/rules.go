@@ -988,7 +988,7 @@ func requiredSectionsFor(typeToken string) []string {
 		return []string{"Description", "Investigation Notes", "Conclusion"}
 	case "adr", "dec":
 		return []string{"Context", "Decision", "Consequences", "Alternatives Considered"}
-	case "vis", "str", "req", "arc", "spec", "std", "run", "rel", "gls":
+	case "vis", "str", "req", "arc", "spec", "std", "run", "rel", "gls", "mbr":
 		return []string{"Purpose", "Content"}
 	case "fnd":
 		return []string{"Purpose", "Content", "Investigation Summary", "Conclusion"}

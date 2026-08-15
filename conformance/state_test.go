@@ -3,8 +3,8 @@ package conformance
 import "testing"
 
 func TestTypeTokenCount(t *testing.T) {
-	if got := len(typeTokens); got != 27 {
-		t.Fatalf("type token table has %d entries, want 27 (26 + cmt, ADR-019 D3)", got)
+	if got := len(typeTokens); got != 28 {
+		t.Fatalf("type token table has %d entries, want 28 (26 + cmt, ADR-019 D3, + mbr, ADR-029)", got)
 	}
 }
 
@@ -28,6 +28,7 @@ func TestOwnedSets(t *testing.T) {
 		"ses":  {DomainExistenceState},
 		"rvw":  {DomainContentState, DomainExistenceState},
 		"cmt":  {DomainContentState, DomainExistenceState, DomainNoteState},
+		"mbr":  {DomainContentState, DomainExistenceState},
 		"adr":  {DomainContentState, DomainExistenceState},
 		"dec":  {DomainContentState, DomainExistenceState},
 		"arc":  {DomainContentState, DomainExistenceState},
@@ -167,10 +168,10 @@ func TestNoteStateTransitions(t *testing.T) {
 	}
 }
 
-func TestDiscussesRelationshipField(t *testing.T) {
+func TestRelationshipFieldSet(t *testing.T) {
 	fields := RelationshipFieldNames()
-	if len(fields) != 7 || fields[5] != "discusses" || fields[6] != "replies-to" {
-		t.Errorf("RelationshipFieldNames = %v, want seven fields ending in discusses, replies-to (ADR-019 D5/D8)", fields)
+	if len(fields) != 8 || fields[5] != "discusses" || fields[6] != "replies-to" || fields[7] != "assigned-to" {
+		t.Errorf("RelationshipFieldNames = %v, want eight fields ending in discusses, replies-to, assigned-to (ADR-019 D5/D8, ADR-029)", fields)
 	}
 	if !IsWorkItemType("sto") || IsWorkItemType("cmt") || len(WorkItemTypes()) != 6 {
 		t.Errorf("work-item type set = %v, want the six gated types", WorkItemTypes())

@@ -446,7 +446,7 @@ func classifyMap(relPath, absPath string, fm map[string]any, requireInstanceVers
 	if _, ok := typeTokens[a.Type]; !ok {
 		results = append(results, Result{
 			File: relPath, Rule: RuleStructural, Severity: SeverityError,
-			Message: fmt.Sprintf("unknown artifact type %q; expected one of the 27 EKA type tokens", a.Type),
+			Message: fmt.Sprintf("unknown artifact type %q; expected one of the %d EKA type tokens", a.Type, len(typeTokens)),
 		})
 	}
 	a.ID, _ = asString(fm["id"])

@@ -15,10 +15,12 @@ import (
 //	Every artifact whose stratum is not 1 (Discovery) must have a
 //	resolvable reference chain (derives-from/depends-on, direct or
 //	transitive) reaching an artifact in a strictly higher stratum.
-//	Exempt: tkt-/ses- tokens (pure projections/operating records) and
+//	Exempt: tkt-/ses- tokens (pure projections/operating records),
 //	cmt- tokens (notes are operating records whose only edge is
 //	discusses — ADR-019 D5 — and stratification traceability is not
-//	meaningful for them), plus artifacts whose content-state is draft
+//	meaningful for them) and mbr- tokens (member lines are operating
+//	records whose only meaningful edge is the assignment relationship —
+//	ADR-029), plus artifacts whose content-state is draft
 //	(knowledge artifacts only: work-item tokens own no content-state
 //	and are never exempt via this clause — they require the chain like
 //	every other non-draft artifact). Violations are warnings:
@@ -54,9 +56,11 @@ func (e *engine) rule10(a *Artifact) {
 	if Stratum(home) == 1 {
 		return // Discovery: top of the authority chain, nothing above.
 	}
-	if a.Type == "tkt" || a.Type == "ses" || a.Type == "cmt" {
-		return // Exempt tokens: projections, session records and notes
-		// (operating records whose only edge is discusses, ADR-019).
+	if a.Type == "tkt" || a.Type == "ses" || a.Type == "cmt" || a.Type == "mbr" {
+		return // Exempt tokens: projections, session records, notes
+		// (operating records whose only edge is discusses, ADR-019) and
+		// member lines (operating records whose only meaningful edge is
+		// the assignment relationship, ADR-029).
 	}
 	if a.States[DomainContentState] == "draft" {
 		return // Draft exemption (knowledge artifacts carry content-state;

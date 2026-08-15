@@ -84,7 +84,7 @@ func buildTicket(g *Graph, target string) (Projection, error) {
 		// projected status IS its own execution state.
 		container, _ := g.ticketTargets(item)
 		p.Container = container
-		p.WorkItem = workItemFor(item)
+		p.WorkItem = g.workItemFor(item)
 		p.Projected = p.WorkItem.State
 	}
 	// Notes: the cmt- notes discussing the ticket and, for a ticket,

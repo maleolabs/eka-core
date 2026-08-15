@@ -417,7 +417,7 @@ func (AuthoringService) NewDraft(rt *Runtime, req NewDraftRequest) (*Draft, erro
 // and writes the file with the atomic O_CREATE|O_EXCL collision guard.
 func newDraftFile(ws *workspace.Workspace, req NewDraftRequest, extraContent map[string]any) (*Draft, error) {
 	if _, ok := conformance.DomainForToken(req.Type); !ok {
-		return nil, fmt.Errorf("authoring: unknown artifact type %q; expected one of the 27 EKA type tokens", req.Type)
+		return nil, fmt.Errorf("authoring: unknown artifact type %q; expected one of the %d EKA type tokens", req.Type, conformance.TypeTokenCount())
 	}
 	if req.ID == "" {
 		return nil, fmt.Errorf("authoring: draft id must be a non-empty string")

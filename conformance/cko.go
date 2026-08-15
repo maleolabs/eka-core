@@ -138,7 +138,7 @@ func ValidateCKO(u CKOArtifact, opts ValidateCKOOptions) (*Report, error) {
 func ckoStructural(e *engine, a *Artifact) {
 	if _, ok := typeTokens[a.Type]; !ok {
 		e.add(a, RuleStructural, SeverityError,
-			"unknown artifact type %q; expected one of the 27 EKA type tokens", a.Type)
+			"unknown artifact type %q; expected one of the %d EKA type tokens", a.Type, len(typeTokens))
 	}
 	if a.ID == "" {
 		e.add(a, RuleStructural, SeverityError,
@@ -173,8 +173,8 @@ func ckoStructural(e *engine, a *Artifact) {
 	}
 }
 
-// isRelationshipField reports whether field is one of the five canonical
-// relationship field names (Rule 5).
+// isRelationshipField reports whether field is one of the eight
+// canonical relationship field names (Rule 5).
 func isRelationshipField(field string) bool {
 	for _, f := range relationshipFields {
 		if f == field {

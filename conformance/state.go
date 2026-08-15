@@ -1,10 +1,11 @@
 package conformance
 
 // This file encodes the EKA v1.0 type/state taxonomy used by the rules:
-// the 27 artifact type tokens (26 + cmt, ADR-019 D3), the 12 knowledge
-// dimensions, the six owned state domains (+ phase context attribute), the
-// value sets per domain, and the forward-only transition tables (Execution
-// State uses the explicit D1 table, ADR-019 §3).
+// the 28 artifact type tokens (26 + cmt, ADR-019 D3, + mbr, ADR-029),
+// the 12 knowledge dimensions, the six owned state domains (+ phase
+// context attribute), the value sets per domain, and the forward-only
+// transition tables (Execution State uses the explicit D1 table, ADR-019
+// §3).
 //
 // Grounding:
 //   - skeleton/docs/exchange/validation.md (Rules 3 and 4 tables)
@@ -39,10 +40,12 @@ var stateFields = []string{
 	DomainNoteState,
 }
 
-// relationshipFields lists the seven canonical relationship fields
+// relationshipFields lists the eight canonical relationship fields
 // validated by Rule 5 (discusses added by ADR-019 D5: the note ->
 // subject edge of cmt- artifacts; replies-to added by ADR-019 D8
-// revised: the reply -> parent edge of cmt- artifacts, single-parent).
+// revised: the reply -> parent edge of cmt- artifacts, single-parent;
+// assigned-to added by ADR-029: the work item -> member edge, at most
+// one target).
 var relationshipFields = []string{
 	"amends",
 	"supersedes",
@@ -51,6 +54,7 @@ var relationshipFields = []string{
 	"validates",
 	"discusses",
 	"replies-to",
+	"assigned-to",
 }
 
 // versionedTypes are the artifact types that MUST carry a -v<nn> filename
@@ -65,7 +69,8 @@ var projectionTypes = map[string]bool{"ctr": true, "tkt": true, "ses": true}
 // informational (Rule 6) and which own the Execution State domain.
 var workItemTypes = map[string]bool{"sto": true, "ts": true, "bug": true, "td": true, "ch": true, "spk": true}
 
-// TypeInfo describes one of the 27 artifact types (26 + cmt, ADR-019 D3).
+// TypeInfo describes one of the 28 artifact types (26 + cmt, ADR-019
+// D3, + mbr, ADR-029).
 type TypeInfo struct {
 	// Token is the frontmatter `type` value, without the trailing dash
 	// used in filenames (e.g. "adr").
@@ -79,8 +84,10 @@ type TypeInfo struct {
 	IsKnowledge bool
 }
 
-// typeTokens is the canonical 27-token table (reference-architecture.md §2.1 — 26 tokens, plus cmt per ADR-019 D3 —
-// validation.md Rule 4). The owned sets follow validation.md Rule 4 exactly.
+// typeTokens is the canonical 28-token table (reference-architecture.md
+// §2.1 — 26 tokens, plus cmt per ADR-019 D3, plus mbr per ADR-029 —
+// validation.md Rule 4). The owned sets follow validation.md Rule 4
+// exactly.
 var typeTokens = map[string]TypeInfo{
 	"vis":  {Token: "vis", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"str":  {Token: "str", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
@@ -99,6 +106,7 @@ var typeTokens = map[string]TypeInfo{
 	"ses":  {Token: "ses", Owned: []string{DomainExistenceState}, IsKnowledge: false},
 	"rvw":  {Token: "rvw", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"cmt":  {Token: "cmt", Owned: []string{DomainContentState, DomainExistenceState, DomainNoteState}, IsKnowledge: false},
+	"mbr":  {Token: "mbr", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: false},
 	"adr":  {Token: "adr", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"dec":  {Token: "dec", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"arc":  {Token: "arc", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},

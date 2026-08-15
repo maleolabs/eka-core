@@ -6,7 +6,7 @@ import (
 )
 
 // This file implements the Engineering Domain ontology of the EKA v1.1
-// standard: the canonical mapping of the 27 artifact type tokens (26 + cmt, ADR-019 D3) and the
+// standard: the canonical mapping of the 28 artifact type tokens (26 + cmt, ADR-019 D3, + mbr, ADR-029) and the
 // 12 knowledge dimensions onto the five Engineering Domains, and the
 // five-stratum authority ordering over them (stratum 1 = highest
 // authority).
@@ -59,6 +59,7 @@ var tokenDomain = map[string]Domain{
 	"rvw": Execution, "ctr": Execution, "tkt": Execution,
 	"sto": Execution, "ts": Execution, "bug": Execution, "td": Execution,
 	"ch": Execution, "spk": Execution, "ses": Execution, "cmt": Execution,
+	"mbr": Execution,
 	// Operations (5).
 	"run": Operations, "rel": Operations,
 }
@@ -84,7 +85,7 @@ var dimensionDomain = map[string]Domain{
 
 // DomainForToken returns the home Engineering Domain of an artifact type
 // token. The second return value is false for unknown tokens (a token not
-// in the 27-token table has no home domain).
+// in the 28-token table has no home domain).
 func DomainForToken(token string) (Domain, bool) {
 	d, ok := tokenDomain[token]
 	return d, ok

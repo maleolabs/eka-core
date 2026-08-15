@@ -93,6 +93,46 @@ v
 `, ns, id, id)
 }
 
+// buildMBR builds a valid member artifact (token-exempt under R10,
+// ADR-029): content-state + existence-state, Purpose/Content sections.
+func buildMBR(ns, id string) string {
+	return fmt.Sprintf(`---
+namespace: %s
+type: mbr
+id: %s
+instance-version: 1
+revision: 1
+content-state: approved
+existence-state: active
+created: 2026-08-05
+updated: 2026-08-05
+supersedes: []
+derives-from: []
+depends-on: []
+change-log:
+  - date: 2026-08-05
+    domain: existence-state
+    from: "-"
+    to: active
+    by: Engineering
+  - date: 2026-08-05
+    domain: content-state
+    from: "-"
+    to: approved
+    by: Engineering
+---
+# Member %s
+
+## Purpose
+
+p
+
+## Content
+
+c
+`, ns, id, id)
+}
+
 // buildADRWithDomain wraps buildADR and injects a declared `domain`
 // frontmatter line.
 func buildADRWithDomain(ns, id, contentState, declaredDomain, relations string) string {
@@ -238,7 +278,7 @@ func TestRule12SupersessionProhibition(t *testing.T) {
 
 // TestRule10Stratification covers the R10 verdicts: Discovery needs no
 // chain; upward chains pass (direct and transitive); isolated non-draft
-// artifacts warn; tkt-/ses- and drafts are exempt.
+// artifacts warn; tkt-/ses-/mbr- and drafts are exempt.
 func TestRule10Stratification(t *testing.T) {
 	req := buildGeneric("eka", "req", "001-auth", "requirements", "approved", "", "")
 	plan := buildPlan("eka", "x", 1, "")
@@ -319,6 +359,18 @@ func TestRule10Stratification(t *testing.T) {
 			name: "session token exempt",
 			files: map[string]string{
 				"docs/operating/sessions/ses-1.md": buildSES("eka", "s-1"),
+			},
+			wantWarn: 0,
+		},
+		{
+			name: "member token exempt",
+			files: map[string]string{
+				// An isolated member line without any upward chain: R10
+				// exemption (ADR-029) — membership artifacts are operating
+				// records whose only meaningful edge is the assignment
+				// relationship, so stratification traceability is not
+				// meaningful for them.
+				"docs/operating/members/mbr-alice.md": buildMBR("eka", "alice"),
 			},
 			wantWarn: 0,
 		},
