@@ -38,6 +38,12 @@
 //	identified by their type owning the Execution State domain
 //	(conformance.OwnedDomains); the ticket itself is never parsed beyond
 //	its relationships.
+//
+// Assignment derivation (ADR-029): a work item's assignee is the member
+// (mbr-) line its assigned-to relationship resolves to; member-scoped
+// views (WorkItemsForMember, the member board) derive membership from
+// the assigned-to edge only, and work items without the edge surface in
+// the dedicated 'No assignee' bucket — never silently excluded.
 package view
 
 import (
@@ -414,8 +420,31 @@ func (g *Graph) WorkItems() []WorkItem {
 	var out []WorkItem
 	for _, u := range g.byForm {
 		if isWorkItemType(u.Identity.Type) {
-			out = append(out, *workItemFor(u))
+			out = append(out, *g.workItemFor(u))
 		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Identity < out[j].Identity })
+	return out
+}
+
+// WorkItemsForMember returns the work items assigned to the member line
+// — the mbr- line whose canonical identity form is form — deduplicated
+// by identity line and sorted by canonical identity. Membership derives
+// from the assigned-to relationship only (ADR-013): an item belongs to
+// a member's scope iff its assigned-to edge resolves to the member
+// line. Items without any assigned-to edge are never matched here; the
+// member board's dedicated 'No assignee' bucket surfaces them instead
+// (ADR-029 Decision 3 — never silently excluded).
+func (g *Graph) WorkItemsForMember(form string) []WorkItem {
+	var out []WorkItem
+	for _, u := range g.byForm {
+		if !isWorkItemType(u.Identity.Type) {
+			continue
+		}
+		if g.assigneeOf(u) != form {
+			continue
+		}
+		out = append(out, *g.workItemFor(u))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Identity < out[j].Identity })
 	return out
@@ -476,6 +505,13 @@ type WorkItem struct {
 	// when absent. It is the display ordering key of the execution
 	// and board projections (items sort by created date ascending).
 	Created string
+	// Assignee is the canonical line identity form of the member
+	// (mbr-) line the item's assigned-to relationship resolves to,
+	// "" when the item carries no resolvable assigned-to edge.
+	// Assignment derives from the relationship only (ADR-013) — never
+	// from content; the 'No assignee' bucket of the member-scoped
+	// board holds items with an empty assignee.
+	Assignee string
 	// NotesCount is the number of cmt- notes discussing the item
 	// (published notes of the store; filled by the execution
 	// projection).
@@ -494,7 +530,10 @@ func isWorkItemType(token string) bool {
 	return false
 }
 
-func workItemFor(u *exchange.Unit) *WorkItem {
+// workItemFor builds the WorkItem model of a work item unit, resolving
+// its assignee from the assigned-to relationship ("" when the item
+// carries no resolvable assigned-to edge).
+func (g *Graph) workItemFor(u *exchange.Unit) *WorkItem {
 	return &WorkItem{
 		Identity:     LineForm(u.Identity.Namespace, u.Identity.Type, u.Identity.ID),
 		Type:         u.Identity.Type,
@@ -503,7 +542,33 @@ func workItemFor(u *exchange.Unit) *WorkItem {
 		Dimension:    u.Classification.Dimension,
 		HasDimension: u.Classification.Dimension != "",
 		Created:      u.Created,
+		Assignee:     g.assigneeOf(u),
 	}
+}
+
+// assigneeOf resolves the unit's assigned-to target to the canonical
+// line identity form of its member (mbr-) line, or "" when the unit
+// carries no resolvable assigned-to edge. Assignment derives from the
+// assigned-to relationship only (ADR-013 — never from content); the
+// target must resolve to an mbr- line of the graph, and the first
+// resolvable target in stored order wins (conformant data carries at
+// most one — single-assignee, ADR-029).
+func (g *Graph) assigneeOf(u *exchange.Unit) string {
+	for _, r := range u.Relationships {
+		if r.Type != "assigned-to" {
+			continue
+		}
+		ref, err := conformance.ParseReference(r.Target, u.Identity.Namespace, u.Identity.Type)
+		if err != nil {
+			continue // Canonical targets always parse; defensive.
+		}
+		target := g.Resolve(ref)
+		if target == nil || target.Identity.Type != "mbr" {
+			continue
+		}
+		return LineForm(target.Identity.Namespace, target.Identity.Type, target.Identity.ID)
+	}
+	return ""
 }
 
 // ticketTargets resolves the container and the work item a ticket
@@ -529,7 +594,7 @@ func (g *Graph) ticketTargets(t *exchange.Unit) (*Container, *WorkItem) {
 		case container == nil && target.Identity.Type == "ctr":
 			container = containerFor(target)
 		case workItem == nil && isWorkItemType(target.Identity.Type):
-			workItem = workItemFor(target)
+			workItem = g.workItemFor(target)
 		}
 	}
 	return container, workItem
