@@ -53,9 +53,14 @@ func specUnit(ns, id string, version int) *exchange.Unit {
 
 // relateWorld seeds a project/repo pair with two published spec- units
 // (acme/spec:a:1 and acme/spec:b:1) under proj-a/repo-a and returns
-// the runtime.
+// the runtime. The working directory is moved to a repo-free temp dir:
+// the repository-context ownership gate resolves the walk-up from the
+// cwd, so tests of the published path must not accidentally resolve the
+// worktree's own eka.yaml (the test cwd would otherwise carry a repo
+// context with an unrelated namespace).
 func relateWorld(t *testing.T) *Runtime {
 	t.Helper()
+	t.Chdir(t.TempDir())
 	r := testRuntime(t)
 	registerWorld(t, r, "proj-a", "repo-a")
 	putUnit(t, r, specUnit("acme", "a", 1), "proj-a", "repo-a")
@@ -367,6 +372,67 @@ func TestRelateVersionedTargetRefused(t *testing.T) {
 	}
 }
 
+// TestRelateNoEdgesUsageError: a relate with no relationship targets at
+// all is a usage error — never a silent "unchanged" (the idempotent
+// duplicate case, where every REQUESTED edge is already present, has a
+// distinct message and result).
+func TestRelateNoEdgesUsageError(t *testing.T) {
+	r := relateWorld(t)
+	_, err := Authoring.Relate(r, RelateRequest{Target: "acme/spec:a"})
+	if err == nil || !strings.Contains(err.Error(), "no relationship targets") {
+		t.Errorf("Relate error = %v, want the no-relationship-targets usage error", err)
+	}
+}
+
+// TestRelateVersionedSelfReferenceRefused: on the published path a
+// versioned self-reference PINNED TO THE ARTIFACT'S OWN INSTANCE is
+// refused (the R5 mirror); a versioned reference to another instance of
+// the own line stays a legitimate intra-line reference (e.g. a
+// supersedes edge to an older instance), mirroring the CKO rule.
+func TestRelateVersionedSelfReferenceRefused(t *testing.T) {
+	r := relateWorld(t)
+	_, err := Authoring.Relate(r, RelateRequest{
+		Target:        "acme/spec:a",
+		Relationships: relEdges("depends-on=acme/spec:a:1"),
+	})
+	var refusal *RelateRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Relate error = %v, want *RelateRefusal", err)
+	}
+	if !strings.Contains(refusal.Error(), "self-reference") {
+		t.Errorf("refusal = %q, want the self-reference message", refusal.Error())
+	}
+}
+
+// TestRelateVersionedSelfReferenceOnDraftRefused: on the draft path ANY
+// reference to the draft's own line — versioned or not — is refused: a
+// draft carries no instance-version, so a versioned own-line reference
+// cannot name a meaningful different instance and must not land in the
+// draft only to be refused at publish.
+func TestRelateVersionedSelfReferenceOnDraftRefused(t *testing.T) {
+	r, project := relateDraftEnv(t)
+	newSTODraft(t, r, project, "feather", "my-item", nil)
+	_, err := Authoring.Relate(r, RelateRequest{
+		Target:        "feather/sto:my-item",
+		Relationships: relEdges("depends-on=feather/sto:my-item:1"),
+	})
+	var refusal *RelateRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Relate error = %v, want *RelateRefusal", err)
+	}
+	if !strings.Contains(refusal.Error(), "self-reference") {
+		t.Errorf("refusal = %q, want the self-reference message", refusal.Error())
+	}
+	// The draft file is untouched.
+	data, err := os.ReadFile(filepath.Join(r.Path(), "drafts", project, "sto-my-item.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "relationships") {
+		t.Errorf("a refused relate must not touch the draft:\n%s", data)
+	}
+}
+
 // --- missing target resolution (Rule 5 draft tolerance) -----------------
 
 // TestRelateUnresolvedTargetDraftTolerance: an unresolved target on a
@@ -397,6 +463,7 @@ func TestRelateUnresolvedTargetDraftTolerance(t *testing.T) {
 // non-draft artifact is a blocking validation error — the relate is
 // refused with *RelateValidationError and nothing is written.
 func TestRelateUnresolvedTargetNonDraftRefused(t *testing.T) {
+	t.Chdir(t.TempDir())
 	r := testRuntime(t)
 	registerWorld(t, r, "proj-a", "repo-a")
 	// A content-state-approved spec- unit (the change-log documents the
@@ -667,5 +734,34 @@ func TestRelateUnqualifiedTargetOutsideRepoRefused(t *testing.T) {
 	}
 	if !strings.Contains(refusal.Error(), "cannot resolve a namespace") {
 		t.Errorf("refusal = %q, want the namespace-resolution message", refusal.Error())
+	}
+}
+
+// TestRelateQualifiedCrossNamespaceRefused: inside a repository
+// context a QUALIFIED target whose namespace differs from the
+// repository's is refused — cross-platform access is read-only, the
+// same ownership gate `eka new`, `eka publish` and `eka transition`
+// enforce (the draft path already protects via its frontmatter check;
+// this gate closes the published path and the whole entry point).
+func TestRelateQualifiedCrossNamespaceRefused(t *testing.T) {
+	r := testRuntime(t)
+	repoDir := t.TempDir()
+	writeRuntimeEKAFile(t, repoDir, "feather-project", "feather-repo", "feather")
+	m := metadata.Metadata{Version: 1, Project: "feather-project", Name: "feather-repo", Namespace: "feather"}
+	if _, _, _, err := r.ws.RegisterRepoMetadata(repoDir, m); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(repoDir)
+
+	_, err := Authoring.Relate(r, RelateRequest{
+		Target:        "other/spec:a",
+		Relationships: relEdges("depends-on=spec:b"),
+	})
+	var refusal *RelateRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Relate error = %v, want *RelateRefusal", err)
+	}
+	if !strings.Contains(refusal.Error(), "cross-platform access is read-only") {
+		t.Errorf("refusal = %q, want the cross-platform ownership message", refusal.Error())
 	}
 }

@@ -56,10 +56,13 @@ import (
 //
 //   - Unknown relationship type: refused (mirror of Rule 5).
 //   - Self-reference: refused (mirror of Rule 5: a target resolving to
-//     the artifact's own line, optionally pinned to its own instance).
+//     the artifact's own line, optionally pinned to its own instance on
+//     the published path; ANY own-line reference on the draft path,
+//     versioned or not — a draft carries no instance-version).
 //   - Duplicate edge: idempotent — edges are a set. A relate whose
 //     edges are all already present writes NOTHING (no new payload,
 //     zero churn). Partially-present edges add only the missing ones.
+//     A relate with NO edges at all is a usage error, never "unchanged".
 //   - Missing target resolution: the published path runs the standard
 //     publish validation (ValidateCKO with the store resolver), so the
 //     Rule 5 draft tolerance applies unchanged: an unresolved target is
@@ -73,6 +76,10 @@ import (
 //     refreshed (mirrors transition).
 //   - Provenance: the existing reference's (project_id, source_repo) is
 //     preserved — relate does not change where the object came from.
+//   - Ownership: when the walk-up resolves an EKA repository, a
+//     qualified target must stay inside the repository's own namespace
+//     (cross-platform access is read-only — the same gate `eka new`,
+//     `eka publish` and `eka transition` enforce).
 //   - Target forms: relate addresses the artifact LINE. Canonical
 //     published forms (carrying an instance-version suffix) are refused.
 
@@ -156,7 +163,10 @@ func (e *RelateValidationError) Error() string {
 // Relate adds relationship edges to an artifact line. Pipeline
 // (deterministic):
 //
-//  1. resolve the target line form (versioned forms refused) and the
+//  1. resolve the target line form (versioned forms refused), refuse a
+//     no-edge request, and apply the repository-context ownership gate
+//     (a qualified target outside the repository's namespace is refused
+//     — cross-platform access is read-only), then resolve the
 //     namespace (qualified target, else the repository context);
 //  2. resolve the line's current state in the canonical store: a
 //     published line relates its current instance; else a pending JSON
@@ -192,6 +202,30 @@ func (AuthoringService) Relate(rt *Runtime, req RelateRequest) (*RelateResult, e
 	if ref.HasVersion {
 		return nil, fmt.Errorf("relate: %s is a canonical published form; relate addresses the artifact line", req.Target) // Exit 2: usage.
 	}
+	// No relationship targets is a usage error — never a silent
+	// "unchanged" (the idempotent-duplicate case, where every REQUESTED
+	// edge is already present, is a distinct message).
+	if len(req.Relationships) == 0 {
+		return nil, fmt.Errorf("relate: no relationship targets; pass --depends-on/--derives-from/--validates/--supersedes/--amends") // Exit 2: usage.
+	}
+
+	// The repository-context ownership gate (mirror of the transition
+	// gate, runtime/transition.go): when the walk-up resolves an EKA
+	// repository, a QUALIFIED target must stay inside the repository's
+	// own namespace — cross-platform access is read-only, the same rule
+	// `eka new`, `eka publish` and `eka transition` enforce. The gate is
+	// skipped outside a repository context (a qualified target is then
+	// explicit line addressing, with no home namespace to compare
+	// against); an unqualified target still requires the context below.
+	_, meta, ctxErr := resolveRepoContext(req.RepoPath)
+	if ctxErr == nil && ref.Namespace != "" && ref.Namespace != meta.Namespace {
+		return nil, &RelateRefusal{
+			Reason: fmt.Sprintf("target namespace %s differs from the repository namespace %s; cross-platform access is read-only",
+				ref.Namespace, meta.Namespace),
+			Hint: "relate only artifacts of the repository's own namespace",
+		}
+	}
+
 	ns := ref.Namespace
 	if ns == "" {
 		// Unqualified target: the namespace resolves from the
@@ -258,7 +292,7 @@ func relatePublished(st *store.Store, ref conformance.Reference, line []*exchang
 
 	// Structural checks (Rule 5 mirrors): unknown type, malformed
 	// reference, self-reference — refused BEFORE anything is written.
-	if err := checkRelateEdges(current.Identity.Namespace, current.Identity.Type, current.Identity.ID, current.Identity.InstanceVersion, adds); err != nil {
+	if err := checkRelateEdges(current.Identity.Namespace, current.Identity.Type, current.Identity.ID, current.Identity.InstanceVersion, false, adds); err != nil {
 		return nil, err
 	}
 
@@ -374,8 +408,12 @@ func relateDraft(ws *workspace.Workspace, rt *Runtime, ref conformance.Reference
 		}
 	}
 
-	// Structural checks (Rule 5 mirrors) against the draft identity.
-	if err := checkRelateEdges(artifact.Namespace, artifact.Type, artifact.ID, artifact.InstanceVersion, adds); err != nil {
+	// Structural checks (Rule 5 mirrors) against the draft identity:
+	// the draft path treats ANY reference to the draft's own line —
+	// versioned or not — as a self-reference (drafts carry no
+	// instance-version, so a versioned own-line reference cannot name a
+	// meaningful different instance).
+	if err := checkRelateEdges(artifact.Namespace, artifact.Type, artifact.ID, artifact.InstanceVersion, true, adds); err != nil {
 		return nil, err
 	}
 
@@ -415,7 +453,17 @@ func relateDraft(ws *workspace.Workspace, rt *Runtime, ref conformance.Reference
 // requested edges against the artifact's identity: unknown relationship
 // type, malformed reference, and self-reference are deterministic
 // refusals (a *RelateRefusal) — nothing is written.
-func checkRelateEdges(ns, typ, id string, version int, adds []exchange.Relationship) error {
+//
+// draft distinguishes the two self-reference semantics: on the
+// PUBLISHED path a versioned reference to another instance of the
+// artifact's own line is a legitimate intra-line reference (e.g. a
+// supersedes edge to an older instance — the CKO rule), so only the
+// artifact's own instance (unversioned, or pinned to its own version)
+// is a self-reference; on the DRAFT path the draft carries no
+// instance-version, so ANY reference to the draft's own line — versioned
+// or not — is a self-reference (a draft cannot meaningfully reference a
+// specific instance of itself).
+func checkRelateEdges(ns, typ, id string, version int, draft bool, adds []exchange.Relationship) error {
 	known := conformance.RelationshipFieldNames()
 	for _, rel := range adds {
 		if !containsString(known, rel.Type) {
@@ -434,8 +482,8 @@ func checkRelateEdges(ns, typ, id string, version int, adds []exchange.Relations
 				Hint:   "references use the <ns>/<type>:<id> or <type>:<id> form",
 			}
 		}
-		if ref.Namespace == ns && ref.Type == typ && ref.ID == id &&
-			(!ref.HasVersion || ref.Version == version) {
+		ownLine := ref.Namespace == ns && ref.Type == typ && ref.ID == id
+		if ownLine && (draft || !ref.HasVersion || ref.Version == version) {
 			return &RelateRefusal{
 				Reason: fmt.Sprintf("self-reference %q in `%s`", rel.Target, rel.Type),
 				Hint:   "an artifact cannot reference itself",
