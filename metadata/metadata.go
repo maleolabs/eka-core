@@ -38,9 +38,15 @@ import (
 // metadataFile is the on-disk file name (the ADR-017 identity file).
 const metadataFile = "eka.yaml"
 
+// SchemaVersion is the eka.yaml schema version: the only version Parse
+// accepts. Exported as the single canonical source of the metadata
+// schema version — generators write it, consumers report it, and the
+// version must never be re-derived or hardcoded anywhere else.
+const SchemaVersion = 1
+
 // Metadata is the parsed repository identity.
 type Metadata struct {
-	// Version is the eka.yaml schema version (1).
+	// Version is the eka.yaml schema version (SchemaVersion).
 	Version int `yaml:"version"`
 	// Project is the workspace project the repository belongs to.
 	Project string `yaml:"project"`
@@ -69,8 +75,8 @@ func ValidIdent(s string) bool {
 // Parse validates and decodes eka.yaml content. Parsing is strict: the
 // document must be a single mapping with exactly the keys
 // version/project/name/namespace (unknown keys and duplicate keys are
-// refused), version must be 1, and project/name/namespace must be
-// valid identifiers (name additionally must not be the reserved
+// refused), version must be SchemaVersion, and project/name/namespace
+// must be valid identifiers (name additionally must not be the reserved
 // "runtime" provenance sentinel). Every error is deterministic and
 // prefixed "metadata: ".
 func Parse(data []byte) (Metadata, error) {
@@ -93,8 +99,8 @@ func Parse(data []byte) (Metadata, error) {
 		return Metadata{}, errors.New("metadata: eka.yaml must contain exactly one YAML document")
 	}
 
-	if m.Version != 1 {
-		return Metadata{}, fmt.Errorf("metadata: eka.yaml version must be 1, got %d", m.Version)
+	if m.Version != SchemaVersion {
+		return Metadata{}, fmt.Errorf("metadata: eka.yaml version must be %d, got %d", SchemaVersion, m.Version)
 	}
 	for _, f := range []struct {
 		name  string
