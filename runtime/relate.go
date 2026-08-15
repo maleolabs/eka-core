@@ -131,9 +131,10 @@ type RelateResult struct {
 }
 
 // RelateRefusal is a deterministic relate refusal carrying the
-// user-facing reason and hint (exit 1 class: self-reference, unknown
-// relationship type, malformed reference, missing artifact, unresolved
-// namespace, Markdown draft). Nothing was written.
+// user-facing reason and hint (exit 1 class: cross-namespace target,
+// self-reference, unknown relationship type, malformed reference,
+// missing artifact, unresolved namespace, Markdown draft). Nothing was
+// written.
 type RelateRefusal struct {
 	Reason string
 	Hint   string

@@ -433,6 +433,73 @@ func TestRelateVersionedSelfReferenceOnDraftRefused(t *testing.T) {
 	}
 }
 
+// TestRelateUnversionedSelfReferenceOnDraftRefused: on the draft path
+// the UNVERSIONED own-line reference is refused too — the draft path
+// treats ANY reference to the draft's own line as a self-reference
+// (this pins the unversioned branch; the versioned branch is covered by
+// TestRelateVersionedSelfReferenceOnDraftRefused).
+func TestRelateUnversionedSelfReferenceOnDraftRefused(t *testing.T) {
+	r, project := relateDraftEnv(t)
+	newSTODraft(t, r, project, "feather", "my-item", nil)
+	_, err := Authoring.Relate(r, RelateRequest{
+		Target:        "feather/sto:my-item",
+		Relationships: relEdges("depends-on=feather/sto:my-item"),
+	})
+	var refusal *RelateRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Relate error = %v, want *RelateRefusal", err)
+	}
+	if !strings.Contains(refusal.Error(), "self-reference") {
+		t.Errorf("refusal = %q, want the self-reference message", refusal.Error())
+	}
+	// The draft file is untouched.
+	data, err := os.ReadFile(filepath.Join(r.Path(), "drafts", project, "sto-my-item.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "relationships") {
+		t.Errorf("a refused relate must not touch the draft:\n%s", data)
+	}
+}
+
+// TestRelateVersionedIntraLineEdgeLegal: on the published path a
+// VERSIONED reference to ANOTHER instance of the artifact's own line is
+// a legitimate intra-line reference (e.g. a supersedes edge to an older
+// instance — the CKO rule: the ref only self-references when pinned to
+// the artifact's OWN instance). This pins the legal branch of the
+// published-path self-reference check (the refusal branch is pinned by
+// TestRelateVersionedSelfReferenceRefused).
+func TestRelateVersionedIntraLineEdgeLegal(t *testing.T) {
+	r := testRuntime(t)
+	registerWorld(t, r, "proj-a", "repo-a")
+	putUnit(t, r, specUnit("acme", "a", 1), "proj-a", "repo-a")
+	// The current instance of the line: v2.
+	putUnit(t, r, specUnit("acme", "a", 2), "proj-a", "repo-a")
+	t.Chdir(t.TempDir()) // repo-context-free cwd (ownership gate off)
+
+	res, err := Authoring.Relate(r, RelateRequest{
+		Target:        "acme/spec:a",
+		Relationships: relEdges("supersedes=acme/spec:a:1"),
+	})
+	if err != nil {
+		t.Fatalf("an intra-line versioned edge must be legal: %v", err)
+	}
+	if res.State != "published" {
+		t.Errorf("State = %q, want published", res.State)
+	}
+	// The edge landed on the CURRENT instance (v2) without churn.
+	u, ok, err := r.Knowledge.Object("acme/spec:a:2")
+	if err != nil || !ok {
+		t.Fatalf("Object = %v, %v", ok, err)
+	}
+	if u.Identity.InstanceVersion != 2 {
+		t.Errorf("InstanceVersion = %d, want 2 (no churn)", u.Identity.InstanceVersion)
+	}
+	if len(u.Relationships) != 1 || u.Relationships[0] != (exchange.Relationship{Type: "supersedes", Target: "acme/spec:a:1"}) {
+		t.Errorf("Relationships = %+v, want the intra-line supersedes edge", u.Relationships)
+	}
+}
+
 // --- missing target resolution (Rule 5 draft tolerance) -----------------
 
 // TestRelateUnresolvedTargetDraftTolerance: an unresolved target on a
@@ -763,5 +830,40 @@ func TestRelateQualifiedCrossNamespaceRefused(t *testing.T) {
 	}
 	if !strings.Contains(refusal.Error(), "cross-platform access is read-only") {
 		t.Errorf("refusal = %q, want the cross-platform ownership message", refusal.Error())
+	}
+}
+
+// TestRelateQualifiedSameNamespaceAllowed: inside the SAME repository
+// context a qualified target whose namespace EQUALS the repository's is
+// allowed — the ownership gate refuses cross-namespace targets only
+// (the sibling of TestRelateQualifiedCrossNamespaceRefused).
+func TestRelateQualifiedSameNamespaceAllowed(t *testing.T) {
+	r := testRuntime(t)
+	repoDir := t.TempDir()
+	writeRuntimeEKAFile(t, repoDir, "feather-project", "feather-repo", "feather")
+	m := metadata.Metadata{Version: 1, Project: "feather-project", Name: "feather-repo", Namespace: "feather"}
+	if _, _, _, err := r.ws.RegisterRepoMetadata(repoDir, m); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(repoDir)
+	putUnit(t, r, specUnit("feather", "a", 1), "feather-project", "feather-repo")
+	putUnit(t, r, specUnit("feather", "b", 1), "feather-project", "feather-repo")
+
+	res, err := Authoring.Relate(r, RelateRequest{
+		Target:        "feather/spec:a",
+		Relationships: relEdges("depends-on=feather/spec:b"),
+	})
+	if err != nil {
+		t.Fatalf("a same-namespace qualified relate must be allowed inside the repo context: %v", err)
+	}
+	if res.State != "published" {
+		t.Errorf("State = %q, want published", res.State)
+	}
+	u, ok, err := r.Knowledge.Object("feather/spec:a:1")
+	if err != nil || !ok {
+		t.Fatalf("Object = %v, %v", ok, err)
+	}
+	if len(u.Relationships) != 1 || u.Relationships[0] != (exchange.Relationship{Type: "depends-on", Target: "feather/spec:b"}) {
+		t.Errorf("Relationships = %+v, want the depends-on edge", u.Relationships)
 	}
 }
