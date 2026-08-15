@@ -70,6 +70,34 @@ func TestWorkItemAssignee(t *testing.T) {
 	}
 }
 
+// TestWorkItemAssigneeCrossRepository: a cross-repository assigned-to
+// target is not a valid assignee — the resolution skips targets outside
+// the unit's own repository (mirroring the R13 sub-check's provenance
+// rule), so the item stays in the 'No assignee' state.
+func TestWorkItemAssigneeCrossRepository(t *testing.T) {
+	units := []*exchange.Unit{
+		unitFixture(t, "other", "mbr", "x", map[string]string{
+			conformance.DomainContentState:   "approved",
+			conformance.DomainExistenceState: "active",
+		}),
+		unitFixture(t, "ns", "sto", "cross", map[string]string{
+			conformance.DomainExecutionState: "todo",
+			conformance.DomainExistenceState: "active",
+		}, exchange.Relationship{Type: "assigned-to", Target: "other/mbr:x"}),
+	}
+	g := NewGraph(".", units)
+	items := g.WorkItems()
+	if len(items) != 1 {
+		t.Fatalf("WorkItems = %d, want 1", len(items))
+	}
+	if got := items[0].Assignee; got != "" {
+		t.Errorf("cross-repository assignee = %q, want \"\" (same-repository assignment only)", got)
+	}
+	if got := g.WorkItemsForMember("other/mbr:x"); len(got) != 0 {
+		t.Errorf("WorkItemsForMember(other/mbr:x) = %v, want empty (cross-repo items are never matched)", got)
+	}
+}
+
 // TestWorkItemsForMember: the helper returns exactly the work items
 // whose assigned-to edge resolves to the member line, deduplicated and
 // sorted by canonical identity. Items without an assigned-to edge are
@@ -106,7 +134,10 @@ func TestWorkItemsForMember(t *testing.T) {
 // Items assigned to other members are excluded.
 func TestBoardForMember(t *testing.T) {
 	g := assignedWorkGraph(t)
-	board := BoardForMember(g, "ns/mbr:alice")
+	board, err := BoardForMember(g, "ns/mbr:alice")
+	if err != nil {
+		t.Fatalf("BoardForMember: %v", err)
+	}
 	if board.Member != "ns/mbr:alice" {
 		t.Errorf("Member = %q, want ns/mbr:alice", board.Member)
 	}
@@ -137,13 +168,27 @@ func TestBoardForMember(t *testing.T) {
 	}
 }
 
+// TestBoardForMemberEmptyFormRefused: an empty member form is refused
+// deterministically — without a member line the scoped columns would be
+// empty while every unassigned item fills the bucket (a degenerate
+// double-count view).
+func TestBoardForMemberEmptyFormRefused(t *testing.T) {
+	g := assignedWorkGraph(t)
+	if _, err := BoardForMember(g, ""); err == nil {
+		t.Error("BoardForMember with an empty member form must be refused")
+	}
+}
+
 // TestBoardForMemberAllUnassigned: a repository without any assigned-to
 // edge projects an empty member board whose entire work is surfaced in
 // the 'No assignee' bucket — legacy data without the field is never
 // excluded (ADR-029 Decision 3).
 func TestBoardForMemberAllUnassigned(t *testing.T) {
 	g := loadFixture(t, "valid")
-	board := BoardForMember(g, "eka-view-fixture/mbr:nobody")
+	board, err := BoardForMember(g, "eka-view-fixture/mbr:nobody")
+	if err != nil {
+		t.Fatalf("BoardForMember: %v", err)
+	}
 	if board.Total != 6 {
 		t.Errorf("Total = %d, want 6 (every fixture item is unassigned)", board.Total)
 	}
@@ -164,8 +209,14 @@ func TestBoardForMemberAllUnassigned(t *testing.T) {
 // columns and bucket, no map iteration in output ordering).
 func TestBoardForMemberDeterministic(t *testing.T) {
 	g := assignedWorkGraph(t)
-	first := BoardForMember(g, "ns/mbr:alice")
-	second := BoardForMember(g, "ns/mbr:alice")
+	first, err := BoardForMember(g, "ns/mbr:alice")
+	if err != nil {
+		t.Fatalf("BoardForMember: %v", err)
+	}
+	second, err := BoardForMember(g, "ns/mbr:alice")
+	if err != nil {
+		t.Fatalf("BoardForMember: %v", err)
+	}
 	if !reflect.DeepEqual(first, second) {
 		t.Error("BoardForMember is not deterministic across repeated builds")
 	}

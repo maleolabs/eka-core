@@ -1,6 +1,7 @@
 package view
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/maleolabs/eka-core/conformance"
@@ -117,8 +118,14 @@ func buildBoard(g *Graph, _ string) (Projection, error) {
 // excluded (ADR-029 Decision 3). Items assigned to other members are
 // excluded. Membership derives from the assigned-to relationship only
 // (ADR-013 — never from content). The container tags, display ordering
-// and state grouping mirror the repository-wide board.
-func BoardForMember(g *Graph, memberForm string) *BoardProjection {
+// and state grouping mirror the repository-wide board. An empty
+// memberForm is refused: with no member line the scoped columns would
+// be empty while every unassigned item fills the bucket — a degenerate
+// double-count view that resolves to nothing useful.
+func BoardForMember(g *Graph, memberForm string) (*BoardProjection, error) {
+	if memberForm == "" {
+		return nil, fmt.Errorf("member board: a member line form is required (the canonical identity form of an mbr- line, e.g. \"ns/mbr:alice\")")
+	}
 	scoped, _, _ := g.boardItems(g.WorkItemsForMember(memberForm))
 	var noAssignee []WorkItem
 	for _, wi := range g.WorkItems() {
@@ -132,7 +139,7 @@ func BoardForMember(g *Graph, memberForm string) *BoardProjection {
 		Total:      len(scoped) + len(bucket),
 		Member:     memberForm,
 		NoAssignee: bucket,
-	}
+	}, nil
 }
 
 // boardItems tags work items with their referencing containers, counts

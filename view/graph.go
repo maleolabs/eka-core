@@ -550,7 +550,9 @@ func (g *Graph) workItemFor(u *exchange.Unit) *WorkItem {
 // line identity form of its member (mbr-) line, or "" when the unit
 // carries no resolvable assigned-to edge. Assignment derives from the
 // assigned-to relationship only (ADR-013 — never from content); the
-// target must resolve to an mbr- line of the graph, and the first
+// target must resolve to an mbr- line of the graph, the target must
+// originate from the unit's own repository (same-namespace, mirroring
+// the R13 sub-check's repository-level provenance), and the first
 // resolvable target in stored order wins (conformant data carries at
 // most one — single-assignee, ADR-029).
 func (g *Graph) assigneeOf(u *exchange.Unit) string {
@@ -561,6 +563,9 @@ func (g *Graph) assigneeOf(u *exchange.Unit) string {
 		ref, err := conformance.ParseReference(r.Target, u.Identity.Namespace, u.Identity.Type)
 		if err != nil {
 			continue // Canonical targets always parse; defensive.
+		}
+		if ref.Namespace != u.Identity.Namespace {
+			continue // Same-repository assignment only (cross-repo is refused by the R13 sub-check).
 		}
 		target := g.Resolve(ref)
 		if target == nil || target.Identity.Type != "mbr" {
