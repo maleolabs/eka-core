@@ -185,6 +185,14 @@ func (e *RelateValidationError) Error() string {
 //     block (deterministic rewrite), then re-validate the draft at CKO
 //     level (non-destructive, mirroring `eka edit`).
 //
+// The published re-point uses store.RepointUnit (not PutUnit): the
+// relate no-churn mechanism re-points at the SAME instance version, so
+// a payload that already sits in the line's history at that version
+// (an earlier same-version payload) must still move the reference —
+// PutUnit's stricter ancestor guard is for the sync/import re-seed
+// paths. An OLDER-version payload still refuses (the line never
+// regresses).
+//
 // A relate whose edges are all already present writes nothing (State =
 // "unchanged").
 func (AuthoringService) Relate(rt *Runtime, req RelateRequest) (*RelateResult, error) {
@@ -340,7 +348,7 @@ func relatePublished(st *store.Store, ref conformance.Reference, line []*exchang
 	if err != nil {
 		return nil, fmt.Errorf("relate: cannot serialize %s: %w", next.CanonicalIdentityForm, err)
 	}
-	hash, _, err := st.PutUnit(unitJSON, next.ContentPayload, store.Ref{
+	hash, _, err := st.RepointUnit(unitJSON, next.ContentPayload, store.Ref{
 		Form:            next.CanonicalIdentityForm,
 		ProjectID:       curRef.ProjectID,
 		SourceRepo:      curRef.SourceRepo,

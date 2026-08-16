@@ -10,6 +10,7 @@ import (
 	"github.com/maleolabs/eka-core/conformance"
 	"github.com/maleolabs/eka-core/exchange"
 	"github.com/maleolabs/eka-core/metadata"
+	"github.com/maleolabs/eka-core/store"
 )
 
 // This file tests the Relate API (runtime/relate.go): the
@@ -173,6 +174,108 @@ func TestRelatePublishedNoInstanceChurn(t *testing.T) {
 }
 
 // --- idempotent duplicates ---------------------------------------------
+
+// TestRelateRepointsToSameVersionAncestor: the round-trip the
+// assignment commands depend on (ADR-029) — an edge is added (relate),
+// removed at the SAME instance version (the unassign write: a re-point
+// without the edge), then re-added (relate). The re-added payload
+// equals the FIRST edge payload — an ancestor of the current reference
+// at the SAME instance version — and the reference must still move to
+// it: the relate published path re-points via store.RepointUnit, which
+// treats same-version payloads as current-state candidates, never
+// history. The line never advances (instance version 1, revision 1).
+func TestRelateRepointsToSameVersionAncestor(t *testing.T) {
+	r := relateWorld(t)
+	st := r.ws.Store()
+
+	// 1. Add the edge: the reference moves to the edge payload.
+	res, err := Authoring.Relate(r, RelateRequest{
+		Target:        "acme/spec:a",
+		Relationships: relEdges("depends-on=acme/spec:b"),
+	})
+	if err != nil {
+		t.Fatalf("first Relate: %v", err)
+	}
+	first := res.ObjectHash
+	if ref, ok, err := st.Ref("acme/spec:a:1"); err != nil || !ok {
+		t.Fatalf("Ref = %v, %v", ok, err)
+	} else if ref.ObjectHash != first {
+		t.Fatalf("reference must move to the edge payload %s, at %s", first, ref.ObjectHash)
+	}
+
+	// 2. Remove the edge at the SAME instance version (the unassign
+	// write: a same-version re-point without the edge).
+	u, ok, err := r.Knowledge.Object("acme/spec:a:1")
+	if err != nil || !ok {
+		t.Fatalf("Object = %v, %v", ok, err)
+	}
+	removed := *u
+	removed.Relationships = []exchange.Relationship{}
+	removed.CanonicalIdentityForm = removed.Identity.CanonicalForm()
+	removedJSON, err := exchange.MarshalUnit(&removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	curRef, ok, err := st.Ref("acme/spec:a:1")
+	if err != nil || !ok {
+		t.Fatalf("Ref = %v, %v", ok, err)
+	}
+	hashRemoved, kept, err := st.RepointUnit(removedJSON, removed.ContentPayload, store.Ref{
+		Form:            removed.CanonicalIdentityForm,
+		ProjectID:       curRef.ProjectID,
+		SourceRepo:      curRef.SourceRepo,
+		Namespace:       removed.Identity.Namespace,
+		Type:            removed.Identity.Type,
+		ID:              removed.Identity.ID,
+		InstanceVersion: removed.Identity.InstanceVersion,
+		Revision:        removed.Revision,
+		Dimension:       removed.Classification.Dimension,
+		Domain:          removed.Classification.Domain,
+		Phase:           removed.Phase,
+		UpdatedAt:       "2026-08-07T00:00:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept {
+		t.Error("the removal re-point must move (a fresh same-version payload)")
+	}
+
+	// 3. Re-add the edge: the payload equals the first edge payload —
+	// an ancestor of the current reference at the SAME instance
+	// version. The reference must move to it (the assignment
+	// round-trip), not stay at the edge-less payload.
+	res2, err := Authoring.Relate(r, RelateRequest{
+		Target:        "acme/spec:a",
+		Relationships: relEdges("depends-on=acme/spec:b"),
+	})
+	if err != nil {
+		t.Fatalf("second Relate: %v", err)
+	}
+	if res2.State != "published" {
+		t.Errorf("State = %q, want published", res2.State)
+	}
+	if res2.ObjectHash != first {
+		t.Errorf("ObjectHash = %s, want %s (the re-created same-version payload)", res2.ObjectHash, first)
+	}
+	if res2.InstanceVersion != 1 {
+		t.Errorf("InstanceVersion = %d, want 1 (no instance churn)", res2.InstanceVersion)
+	}
+	ref, ok, err := st.Ref("acme/spec:a:1")
+	if err != nil || !ok {
+		t.Fatalf("Ref = %v, %v", ok, err)
+	}
+	if ref.ObjectHash != first {
+		t.Errorf("reference = %s, want the re-added edge payload %s", ref.ObjectHash, first)
+	}
+	if ref.ObjectHash == hashRemoved {
+		t.Error("reference must not stay at the edge-less payload")
+	}
+	if ref.InstanceVersion != 1 || ref.Revision != 1 {
+		t.Errorf("ref index = v%d r%d, want v1 r1 (no churn in the reference index)",
+			ref.InstanceVersion, ref.Revision)
+	}
+}
 
 // TestRelateDuplicateEdgeIdempotent: a duplicate edge is a no-op — the
 // second relate writes NOTHING (no new payload, State = unchanged), and
