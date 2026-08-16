@@ -43,6 +43,7 @@ eka-core is a library: consumers import its packages directly (the CLI,
 | [`view`](view) | The projection engine: the closed set of named views (five Engineering Domains, `ticket`, `board`, `document`, `containers`) over the Knowledge Graph. |
 | [`machine`](machine) | The machine interface: deterministic canonical JSON (`eka-cko-v2`) of CKOs and collections, for `eka get`, MCP, and other machine consumers. |
 | [`contexts`](contexts) | The Context Engine: deterministic construction of the Context Object around one knowledge subject at three depths (`local`, `dependency`, `engineering`). |
+| [`plugin`](plugin) | The EKA plugin contract (v1): the shared types (`Manifest`, `Artifact`, `InstallOptions`, `InstallResult`, `ContractVersion`) and the official plugin registry (`Repo`, `Registry`, `OfficialRegistry`) that the CLI and plugins such as `eka-mcp` both import. |
 
 ## API guide
 
@@ -160,6 +161,28 @@ dir := metadata.Find(path)            // nearest eka.yaml walk-up
   also exposes `Projections()`, `Aliases()`, and `HelpList()`.
 - `contexts.New(rt)` wires the Context Engine; `engine.Build(subject,
   projectID, depth, opts)` constructs the Context Object.
+
+### plugin — the plugin contract and official registry
+
+```go
+m, err := p.Manifest()                       // (Manifest, error)
+res, err := p.Install(InstallOptions{...})   // (InstallResult, error)
+plugins, err := plugin.Discover(home)        // ([]Plugin, error)
+repo, ok := plugin.OfficialRegistry.Lookup("mcp")
+```
+
+- `Manifest`, `Artifact`, `InstallOptions`, `InstallResult`, and
+  `ContractVersion` are the machine-readable contract between the CLI and a
+  plugin executable (`eka-<name>`); `Plugin` runs the `manifest --json` /
+  `install <kind> --dir <dir> [--dry-run] --json` subcommands and parses
+  their JSON output.
+- `Discover(home)` finds `eka-*` executables on `PATH` and in the plugin
+  directories; `PluginDir(home)` / `DefaultPluginPaths(home)` resolve the
+  install target.
+- `Repo`, `Registry`, and `OfficialRegistry` are the hardcoded official
+  plugin registry (name → canonical source repository, e.g. `mcp` →
+  `maleolabs/eka-mcp`); `Lookup`, `IsOfficial`, and `Names` drive the
+  two-tier trust model.
 
 ## Versioning
 
