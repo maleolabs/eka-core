@@ -324,6 +324,91 @@ func TestPutUnitForwardOnlyReference(t *testing.T) {
 	}
 }
 
+// TestRepointUnitSameVersionAncestor: the repoint path of the relate
+// no-churn mechanism (store.RepointUnit) — a put whose payload already
+// sits in the line's history at the SAME instance version re-points
+// the reference (a same-version payload is the line's current state,
+// never history: re-adding an assigned-to edge that an unassign
+// removed recreates the earlier same-version payload, and the
+// reference must move to it). PutUnit keeps the stricter ancestor
+// guard (the sync/import re-seed protection), and an OLDER-version
+// repoint still refuses (the line never regresses).
+func TestRepointUnitSameVersionAncestor(t *testing.T) {
+	s := openTest(t)
+	form := "acme/sto:x:1"
+
+	// Root payload — the line's first instance.
+	h1, _, err := s.PutUnit(unitJSON(t, "acme", "sto", "x", 1, 1), []byte("body v1"), ref(form, "p", "r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = h1
+
+	// A relate-like same-version move (the edge payload): new payload,
+	// SAME instance version — the reference moves forward.
+	h2, kept, err := s.PutUnit(unitJSON(t, "acme", "sto", "x", 1, 2), []byte("body v2"), ref(form, "p", "r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept {
+		t.Error("forward same-version move must not report keptNewer")
+	}
+
+	// A removal-like same-version move (the edge removed): the
+	// reference moves again.
+	h3, kept, err := s.PutUnit(unitJSON(t, "acme", "sto", "x", 1, 3), []byte("body v3"), ref(form, "p", "r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept {
+		t.Error("second forward move must not report keptNewer")
+	}
+
+	// The re-add recreates h2's payload: h2 is an ancestor of h3 at the
+	// SAME instance version. PutUnit keeps the reference (the re-seed
+	// protection — a sync pull must not clobber a workspace-native
+	// same-version write); RepointUnit moves it (the relate/assignment
+	// no-churn re-point).
+	if _, kept, err := s.PutUnit(unitJSON(t, "acme", "sto", "x", 1, 2), []byte("body v2"), ref(form, "p", "r")); err != nil {
+		t.Fatal(err)
+	} else if !kept {
+		t.Error("PutUnit of a same-version ancestor must keep the reference (re-seed protection)")
+	}
+	if got, ok, err := s.Ref(form); err != nil || !ok {
+		t.Fatalf("Ref = %v, %v", ok, err)
+	} else if got.ObjectHash != h3 {
+		t.Errorf("PutUnit must not re-point to the same-version ancestor, at %s", got.ObjectHash)
+	}
+
+	if _, kept, err := s.RepointUnit(unitJSON(t, "acme", "sto", "x", 1, 2), []byte("body v2"), ref(form, "p", "r")); err != nil {
+		t.Fatal(err)
+	} else if kept {
+		t.Error("same-version repoint of an ancestor must not report keptNewer")
+	}
+	if got, ok, err := s.Ref(form); err != nil || !ok {
+		t.Fatalf("Ref = %v, %v", ok, err)
+	} else if got.ObjectHash != h2 {
+		t.Errorf("repoint must move the reference to the same-version ancestor %s, at %s", h2, got.ObjectHash)
+	}
+
+	// An OLDER-version repoint still refuses: the line never regresses.
+	formZ := "acme/sto:z:2"
+	hz, _, err := s.PutUnit(unitJSON(t, "acme", "sto", "z", 2, 1), []byte("z v2"), refV(formZ, "p", "r", 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, kept, err := s.RepointUnit(unitJSON(t, "acme", "sto", "z", 1, 1), []byte("z v1"), refV(formZ, "p", "r", 1)); err != nil {
+		t.Fatal(err)
+	} else if !kept {
+		t.Error("older-version repoint must report keptNewer = true")
+	}
+	if got, ok, err := s.Ref(formZ); err != nil || !ok {
+		t.Fatalf("Ref = %v, %v", ok, err)
+	} else if got.ObjectHash != hz {
+		t.Errorf("older-version repoint must not move the reference, at %s", got.ObjectHash)
+	}
+}
+
 // TestPutUnitsForwardOnlyReference: the guard applies inside the batch
 // path too — a batch carrying an older instance of an existing line
 // must not re-point its reference, while fresh lines land normally.
