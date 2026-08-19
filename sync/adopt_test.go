@@ -227,9 +227,9 @@ func TestAdoptTargetNotRuntimeRefused(t *testing.T) {
 	w, repo := adoptEnv(t)
 
 	for _, target := range []string{
-		repo.Namespace + "/sto:missing",          // no unit at all
-		repo.Namespace + "/sto:login-email",      // a repository-owned unit (seeded by the fixture sync)
-		repo.Namespace + "/sto:runtime-only:9",   // a workspace-native line, wrong instance
+		repo.Namespace + "/sto:missing",        // no unit at all
+		repo.Namespace + "/sto:login-email",    // a repository-owned unit (seeded by the fixture sync)
+		repo.Namespace + "/sto:runtime-only:9", // a workspace-native line, wrong instance
 	} {
 		_, err := Adopt(w, repo, []string{target}, false)
 		if err == nil {
