@@ -45,6 +45,13 @@
 //     existing-snapshot header, else most common namespace, else
 //     error) and emitted into <repo>/exchange/snapshots atomically
 //     (write to .snapshots-tmp, then swap).
+//   - Adopt (ADR-032 Option C2): workspace-native units (published via
+//     `eka publish`, provenance sentinel source_repo = "runtime") are
+//     re-attributed to the repository provenance — a reference-only
+//     operation (the immutable payloads are untouched) that makes the
+//     next push carry the adopted units into the snapshot. AdoptAt is
+//     the Authoring API entry; Options.AdoptBeforePush runs the adopt
+//     inside Run before the push (`eka sync push --adopt`).
 //
 // Repository context (ADR-018): an EKA repository is a directory
 // tree carrying eka.yaml. The walk-up locates it; a directory without
@@ -100,6 +107,13 @@ type Options struct {
 	// refused); the caller wires a TTY arrow-selected prompt (the
 	// bootstrap.ConfirmOverwrite precedent). Injectable for tests.
 	Confirm func(prompt string, options []string, defaultIdx int) (int, error)
+	// AdoptBeforePush re-attributes the workspace-native units of the
+	// repository's project to the repository provenance BEFORE the
+	// push (ADR-032 Option C2): units published via `eka publish`
+	// (source_repo = "runtime") enter the snapshot on this run, so a
+	// clone on another device receives them. It is the engine behind
+	// `eka sync push --adopt`.
+	AdoptBeforePush bool
 }
 
 // Report is the deterministic outcome of one sync run.
@@ -144,6 +158,14 @@ type Report struct {
 	// re-seeded an older instance; deterministic order, empty when
 	// none).
 	KeptNewer []string
+	// AdoptedUnits counts the units an AdoptBeforePush run
+	// re-attributed from the workspace-native provenance to the
+	// repository provenance (0 when no adopt ran).
+	AdoptedUnits int
+	// AdoptedSkipped lists the canonical forms an AdoptBeforePush run
+	// refused because the repository already references the identity
+	// with a different payload (deterministic order, empty when none).
+	AdoptedSkipped []string
 	// Warnings are informational notes, in deterministic order.
 	Warnings []string
 }
@@ -498,6 +520,20 @@ func Run(ws *workspace.Workspace, repoPath string, opts Options) (*Report, error
 		repo.Namespace = m.Namespace
 	}
 	report.Repo = repo.Name
+
+	if opts.AdoptBeforePush {
+		// ADR-032 Option C2: re-attribute the workspace-native units
+		// to the repository provenance before the push, so the pushed
+		// snapshot carries them (and a clone on another device pulls
+		// them back). Runs before any push work; a refusal aborts the
+		// run with nothing written.
+		result, err := Adopt(ws, repo, nil, false)
+		if err != nil {
+			return nil, err
+		}
+		report.AdoptedUnits = result.Units
+		report.AdoptedSkipped = result.Skipped
+	}
 
 	if opts.Pull {
 		result, err := Pull(ws, repo, opts.FromDocs)
