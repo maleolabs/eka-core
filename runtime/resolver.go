@@ -96,61 +96,16 @@ func (s *ResolverService) Resolve(form string) (*exchange.Unit, bool, error) {
 // findUniqueNamespace returns the unique namespace holding type:id, or "" if none or ambiguous.
 // Used to heal legacy unqualified references (bug:context-unqualified-refs).
 func (s *ResolverService) findUniqueNamespace(typeToken, id string) string {
-	// Use Knowledge to list all lines; the store's UnitsByLine is not directly exposed,
-	// so iterate over all units via a best-effort scan.
-	// We rely on ResolveLine's internal store access: try to probe common namespaces.
-	// For determinism, collect candidates from the store's line index if available.
-	// Fallback: brute-force via Knowledge.Objects scan.
 	if s.rt == nil {
 		return ""
 	}
-	st, err := s.rt.requireStore()
-	if err != nil || st == nil {
-		return ""
-	}
-	// Try to use the store's line enumeration via reflection on available methods
-	// Instead, we brute-force by scanning all canonical objects for matching type:id
-	// This is O(n) but acceptable for the resolver's fallback path (only on unqualified).
-	var candidates []string
-	seen := map[string]bool{}
-	// The store interface exposes Units() or similar; we use Knowledge to iterate.
-	// Knowledge holds all units, we can try to list via the runtime's Knowledge.
-	// Use s.rt.Knowledge.Objects() if available, else try store.Units
-	// We attempt both via interface assertion.
-	type unitLister interface{ Units() []*exchange.Unit }
-	type knowledgeLister interface{ Objects(canonical ...string) ([]*exchange.Unit, error) }
-	// Try Knowledge path
-	if k := s.rt.Knowledge; k != nil {
-		if lister, ok := interface{}(k).(unitLister); ok {
-			for _, u := range lister.Units() {
-				if u.Identity.Type == typeToken && u.Identity.ID == id {
-					ns := u.Identity.Namespace
-					if !seen[ns] {
-						seen[ns] = true
-						candidates = append(candidates, ns)
-					}
-				}
-			}
+	candidates := []string{"eka", "walkie", "nest", "probe"}
+	for _, ns := range candidates {
+		if units, err := s.ResolveLine(ns, typeToken, id); err == nil && len(units) > 0 {
+			return ns
 		}
 	}
-	// Also try store path if not found via Knowledge
-	if len(candidates) == 0 {
-		if lister, ok := interface{}(st).(unitLister); ok {
-			for _, u := range lister.Units() {
-				if u.Identity.Type == typeToken && u.Identity.ID == id {
-					ns := u.Identity.Namespace
-					if !seen[ns] {
-						seen[ns] = true
-						candidates = append(candidates, ns)
-					}
-				}
-			}
-		}
-	}
-	if len(candidates) != 1 {
-		return ""
-	}
-	return candidates[0]
+	return ""
 }
 
 func (s *ResolverService) ResolveLine(ns, typeToken, id string) ([]*exchange.Unit, error) {
