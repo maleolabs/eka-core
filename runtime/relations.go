@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"github.com/maleolabs/eka-core/conformance"
 	"sort"
 
 	"github.com/maleolabs/eka-core/exchange"
@@ -57,6 +58,20 @@ func (s *RelationsService) From(form string) ([]Relation, error) {
 // workspace knowledge, which is the point of the Runtime: consumers
 // never hand-walk relationships themselves, and at workspace scale the
 // linear scan is the honest cost of a workspace-wide reverse index.
+
+// targetsEqual returns true if a and b refer to the same line (same ns/type/id),
+// ignoring version suffix. This heals downstream queries where the stored
+// relationship target is a line form "ns/type:id" but the query is canonical
+// "ns/type:id:v" or vice versa (bug:downstream-missing).
+func targetsEqual(a, b string) bool {
+    ra, errA := conformance.ParseReference(a, "", "")
+    rb, errB := conformance.ParseReference(b, "", "")
+    if errA != nil || errB != nil {
+        return a == b
+    }
+    return ra.Namespace == rb.Namespace && ra.Type == rb.Type && ra.ID == rb.ID
+}
+
 func (s *RelationsService) To(target string) ([]Relation, error) {
 	projects, err := s.rt.Workspace.Projects()
 	if err != nil {
@@ -71,7 +86,7 @@ func (s *RelationsService) To(target string) ([]Relation, error) {
 		}
 		for _, u := range units {
 			for _, rel := range u.Relationships {
-				if rel.Target != target {
+				if !targetsEqual(rel.Target, target) {
 					continue
 				}
 				r := Relation{Type: rel.Type, Target: u.CanonicalIdentityForm}
