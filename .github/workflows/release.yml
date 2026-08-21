@@ -1,0 +1,86 @@
+# eka-core release pipeline (library distribution).
+#
+# Triggered by pushing a git tag matching vMAJOR.MINOR.PATCH (rc suffix
+# allowed). Adapted for a pure Go library: NO binaries, NO checksums —
+# integrity is guaranteed by go.sum + the Go checksum DB (sumdb), so the
+# only artifacts are the GitHub Release notes (--generate-notes) and the
+# tag itself.
+#
+# Guardrails mirror eka-cli's reference implementation:
+#   1. semver regex check on the tag
+#   2. duplicate-release check (gh release view fails fast)
+#   3. quality gate (gofmt/vet/test) runs BEFORE release creation
+#   4. gh release create --generate-notes --target <sha>
+#
+# Pushed tags are never deleted or recreated: Go module resolution and
+# downstream go.sum entries anchor to the tag's commit. Use -rc suffixes
+# for trial releases; never publish a major bump without a /v2 module path.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Validate semver tag
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          if ! [[ "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag v$TAG is not semver (vMAJOR.MINOR.PATCH[-rc.X])"
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          if [[ "$TAG" == *-* ]]; then
+            echo "PRERELEASE=true" >> "$GITHUB_ENV"
+          else
+            echo "PRERELEASE=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check release does not already exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$TAG" >/dev/null 2>&1; then
+            echo "::error::Release v$TAG already exists; delete it or pick a new version."
+            exit 1
+          fi
+          echo "Release v$TAG does not exist yet"
+
+      - name: Quality gate (gofmt, vet, test)
+        run: |
+          test -z "$(gofmt -l .)" || { echo "::error::gofmt needed"; gofmt -l .; exit 1; }
+          go vet ./...
+          go test ./...
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [[ "$PRERELEASE" == "true" ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "v$TAG" \
+            --title "v$TAG" \
+            --generate-notes \
+            --target "$GITHUB_SHA" \
+            $PRERELEASE_FLAG
