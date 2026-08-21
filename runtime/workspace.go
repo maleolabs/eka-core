@@ -41,6 +41,20 @@ func (s *WorkspaceService) RegisterRepo(path, name string) (Project, Repo, bool,
 	return ws.RegisterRepo(path, name)
 }
 
+// UnregisterRepo removes the repository (projectID, name) from the
+// registry (registry semantics of workspace.UnregisterRepo: the repos
+// row is deleted, removed reports whether it existed, the reserved
+// name "runtime" is refused, and removing a project's LAST repository
+// deletes the empty project row too — canonical knowledge objects
+// stay in the store).
+func (s *WorkspaceService) UnregisterRepo(projectID, name string) (bool, error) {
+	ws, err := s.rt.requireWorkspace()
+	if err != nil {
+		return false, err
+	}
+	return ws.UnregisterRepo(projectID, name)
+}
+
 // FindRepo returns the repository registered at absPath (normalized
 // absolute), if any.
 func (s *WorkspaceService) FindRepo(absPath string) (Repo, bool, error) {
