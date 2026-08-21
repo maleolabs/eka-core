@@ -184,6 +184,49 @@ func (w *Workspace) register(path, projectName, repoName, namespace string) (Pro
 	return project, repo, created, nil
 }
 
+// UnregisterRepo removes the repository (projectID, name) from the
+// registry: the repos row (project_id, name) is deleted and removed
+// reports whether a row existed (false = it was not registered — not
+// an error). The reserved provenance sentinel "runtime" is refused
+// with the same deterministic error as registration (the sentinel can
+// never be unregistered because it can never be registered).
+//
+// When the removed repository was the project's LAST repository, the
+// now-empty project row is deleted too — a project exists only as a
+// grouping of repositories, so removing the last member removes the
+// group. Canonical knowledge objects are NOT touched: they stay in
+// the store under their provenance pair, and re-registering the
+// repository restores their provenance access.
+func (w *Workspace) UnregisterRepo(projectID, name string) (bool, error) {
+	if name == ReservedRepoName {
+		return false, fmt.Errorf(
+			"workspace: repository name %q is reserved for workspace-native knowledge", name)
+	}
+	res, err := w.Store().DB().Exec(`DELETE FROM repos WHERE project_id = ? AND name = ?`, projectID, name)
+	if err != nil {
+		return false, fmt.Errorf("workspace: cannot unregister repository %s/%s: %w", projectID, name, err)
+	}
+	removed, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("workspace: cannot confirm the unregistration of %s/%s: %w", projectID, name, err)
+	}
+	if removed == 0 {
+		return false, nil
+	}
+	// Last-repo cleanup: when no repositories remain under the
+	// project, delete the empty project row (see the doc comment).
+	var remaining int
+	if err := w.Store().DB().QueryRow(`SELECT COUNT(*) FROM repos WHERE project_id = ?`, projectID).Scan(&remaining); err != nil {
+		return false, fmt.Errorf("workspace: cannot count the repositories of project %q: %w", projectID, err)
+	}
+	if remaining == 0 {
+		if _, err := w.Store().DB().Exec(`DELETE FROM projects WHERE id = ?`, projectID); err != nil {
+			return false, fmt.Errorf("workspace: cannot remove the emptied project %q: %w", projectID, err)
+		}
+	}
+	return true, nil
+}
+
 // repoExists reports whether a repo row already exists (checked before
 // the upsert, so a pre-existing row means the upsert was an update).
 func repoExists(w *Workspace, projectID, name string) (bool, error) {
