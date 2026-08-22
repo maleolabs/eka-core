@@ -55,6 +55,19 @@ func (s *WorkspaceService) UnregisterRepo(projectID, name string) (bool, error) 
 	return ws.UnregisterRepo(projectID, name)
 }
 
+// UnregisterProject removes the whole project (registry semantics of
+// workspace.UnregisterProject): every repository row under projectID
+// is deleted and the project row is deleted too; the count reports how
+// many repositories were removed (0 = none or unknown project).
+// Canonical knowledge objects stay in the store.
+func (s *WorkspaceService) UnregisterProject(projectID string) (int, error) {
+	ws, err := s.rt.requireWorkspace()
+	if err != nil {
+		return 0, err
+	}
+	return ws.UnregisterProject(projectID)
+}
+
 // FindRepo returns the repository registered at absPath (normalized
 // absolute), if any.
 func (s *WorkspaceService) FindRepo(absPath string) (Repo, bool, error) {

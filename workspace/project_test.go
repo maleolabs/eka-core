@@ -310,3 +310,77 @@ func TestUnregisterRepoReservedName(t *testing.T) {
 		t.Errorf("refusal error = %v, want the reserved-name message", err)
 	}
 }
+
+// TestUnregisterProject: every repository row under the project is
+// deleted and the project row is deleted too; the count reports the
+// number of removed repositories. An unknown project reports 0 — not
+// an error — and an orphaned empty project row (unreachable through
+// the public API, defensive) is cleaned up as well.
+func TestUnregisterProject(t *testing.T) {
+	w := ensureTest(t)
+	dirA := filepath.Join(t.TempDir(), "backend")
+	dirB := filepath.Join(t.TempDir(), "frontend")
+	dirC := filepath.Join(t.TempDir(), "other")
+	for _, dir := range []string{dirA, dirB, dirC} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, _, err := w.RegisterRepo(dirA, "multi"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := w.RegisterRepo(dirB, "multi"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := w.RegisterRepo(dirC, "other"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unregister the whole multi project: both repos go, other stays.
+	n, err := w.UnregisterProject("multi")
+	if err != nil {
+		t.Fatalf("UnregisterProject(multi): %v", err)
+	}
+	if n != 2 {
+		t.Errorf("UnregisterProject(multi) removed %d repos, want 2", n)
+	}
+	repos, err := w.Repos("multi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 0 {
+		t.Errorf("Repos(multi) after unregister = %+v, want empty", repos)
+	}
+	projects, err := w.Projects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].ID != "other" {
+		t.Errorf("Projects after unregister = %+v, want only other", projects)
+	}
+
+	// An unknown project reports 0 without error.
+	n, err = w.UnregisterProject("ghost-project")
+	if err != nil || n != 0 {
+		t.Errorf("UnregisterProject(ghost-project) = %d, %v; want 0, nil", n, err)
+	}
+
+	// An orphaned empty project row (defensive: unreachable via the
+	// public API) is cleaned up too.
+	if _, err := w.Store().DB().Exec(`INSERT INTO projects (id, name, created) VALUES ('orphan', 'orphan', '2026-01-01')`); err != nil {
+		t.Fatal(err)
+	}
+	n, err = w.UnregisterProject("orphan")
+	if err != nil || n != 0 {
+		t.Errorf("UnregisterProject(orphan) = %d, %v; want 0, nil", n, err)
+	}
+	projects, err = w.Projects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range projects {
+		if p.ID == "orphan" {
+			t.Errorf("orphan project row survived UnregisterProject: %+v", projects)
+		}
+	}
+}

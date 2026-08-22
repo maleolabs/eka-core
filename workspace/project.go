@@ -254,6 +254,33 @@ func findRepoByPath(w *Workspace, abs string) (Repo, bool, error) {
 	return r, true, nil
 }
 
+// UnregisterProject removes the whole project: every repository row
+// under projectID is deleted and the project row is deleted too. It
+// reports how many repository rows were removed (0 = the project had
+// no repositories or did not exist — not an error; callers resolve
+// existence beforehand for their own deterministic messaging). The
+// project row is deleted unconditionally, which also cleans up an
+// orphaned empty project row (reachable only through a crash between
+// the two non-transactional inserts of register, or legacy databases).
+//
+// Canonical knowledge objects are NOT touched: they stay in the store
+// under their provenance pairs, and re-registering restores provenance
+// access (the same contract as UnregisterRepo).
+func (w *Workspace) UnregisterProject(projectID string) (int, error) {
+	res, err := w.Store().DB().Exec(`DELETE FROM repos WHERE project_id = ?`, projectID)
+	if err != nil {
+		return 0, fmt.Errorf("workspace: cannot unregister the repositories of project %q: %w", projectID, err)
+	}
+	removed, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("workspace: cannot confirm the unregistration of project %q: %w", projectID, err)
+	}
+	if _, err := w.Store().DB().Exec(`DELETE FROM projects WHERE id = ?`, projectID); err != nil {
+		return 0, fmt.Errorf("workspace: cannot remove the project %q: %w", projectID, err)
+	}
+	return int(removed), nil
+}
+
 // FindRepo resolves the repository for absPath. Resolution is
 // identity-based when the path tree carries repository identity
 // metadata (eka.yaml, ADR-017): the metadata is located by walking up
