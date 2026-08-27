@@ -155,6 +155,7 @@ type Entry struct {
 	// type that pulled it in, or "constraint" for higher-authority
 	// units reached only through the bounded closure.
 	Role string `json:"role,omitempty"`
+	ObjectHash    string `json:"objectHash,omitempty"`
 }
 
 // Stratum is one non-empty stratum group of the collected units:
