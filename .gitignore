@@ -2,10 +2,7 @@
 /dist/
 *.test
 *.out
-
-# Local EKA workspace registration identity (dev-time, machine-specific)
-/eka.yaml
-
+ 
 # EKA runtime transient state (sync staging, never committed)
 **/exchange/.snapshots-tmp/
 **/exchange/.snapshots-old/
