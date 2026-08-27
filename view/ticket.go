@@ -1,7 +1,10 @@
 package view
 
 import (
+	"encoding/json"
 	"fmt"
+
+	"github.com/maleolabs/eka-core/exchange"
 )
 
 // This file implements the ticket projection: one ticket (tkt-) with
@@ -45,6 +48,21 @@ type TicketProjection struct {
 	// only when requested (eka view ticket --with-note /
 	// --with-comments, eka get ticket --with-notes).
 	Notes []TicketNote
+	// ReviewSummary is the per-reviewer verdict summary of the review
+	// trail (phase2-core-view): one entry per reviewer author with the
+	// list of per-note verdicts — never a single aggregate. Additive,
+	// schema-stable (eka-ticket-v1 reviewSummary); empty when no review
+	// notes exist.
+	ReviewSummary []ReviewerVerdicts `json:"reviewSummary,omitempty"`
+}
+
+// ReviewerVerdicts is one reviewer's slice of the review trail: the
+// author identity name and every verdict that reviewer recorded, in
+// canonical note order. Verdicts are advisory; composition is a list,
+// never an aggregate.
+type ReviewerVerdicts struct {
+	Author   string   `json:"author"`
+	Verdicts []string `json:"verdicts"`
 }
 
 // Name returns the registry name of the projection.
@@ -103,6 +121,41 @@ func buildTicket(g *Graph, target string) (Projection, error) {
 			Replies: g.RepliesFor(LineForm(n.Identity.Namespace, n.Identity.Type, n.Identity.ID)),
 		})
 	}
+	p.ReviewSummary = buildReviewSummary(p.Notes)
 	p.Ticket.Projected = p.Projected
 	return p, nil
+}
+
+// buildReviewSummary groups review-role notes by author and lists each
+// reviewer's verdicts in canonical order (phase2-core-view). Notes
+// without a decodable role or without a verdict are skipped; reviewers
+// appear in first-appearance order of their notes.
+func buildReviewSummary(notes []TicketNote) []ReviewerVerdicts {
+	var out []ReviewerVerdicts
+	index := map[string]int{}
+	for _, tn := range notes {
+		content := map[string]any{}
+		if tn.Note.Content.Representation == exchange.StructuredJSON {
+			_ = json.Unmarshal(tn.Note.ContentPayload, &content)
+		}
+		if role, _ := content["role"].(string); role != "review" {
+			continue
+		}
+		author := tn.Note.Author.Name
+		if author == "" {
+			continue
+		}
+		verdict, _ := content["verdict"].(string)
+		if verdict == "" {
+			continue
+		}
+		i, ok := index[author]
+		if !ok {
+			i = len(out)
+			index[author] = i
+			out = append(out, ReviewerVerdicts{Author: author})
+		}
+		out[i].Verdicts = append(out[i].Verdicts, verdict)
+	}
+	return out
 }

@@ -486,10 +486,10 @@ func checkContract(p *loadedPackage) error {
 			"import refused: unsupported exchange format version %q (found) — this importer supports %q (supported); the package cannot be interpreted safely",
 			h.ExchangeFormatVersion, ExchangeFormatVersion)
 	}
-	if h.SpecificationVersion != SpecificationVersion {
+	if h.SpecificationVersion != SpecificationVersion && h.SpecificationVersion != LegacySpecificationVersion {
 		return packageErrorf(
-			"import refused: unsupported specification version %q (found) — this importer validates against %q (supported); the taxonomy and state variants of the declared version cannot be applied",
-			h.SpecificationVersion, SpecificationVersion)
+			"import refused: unsupported specification version %q (found) — this importer validates against %q (supported; legacy %q accepted); the taxonomy and state variants of the declared version cannot be applied",
+			h.SpecificationVersion, SpecificationVersion, LegacySpecificationVersion)
 	}
 	if h.Exporter == "" {
 		return packageErrorf("import refused: the package header declares no exporter identity")

@@ -43,8 +43,12 @@ import (
 const (
 	// SpecificationVersion is the version of the EKA Exchange
 	// Specification (and EKA standard) the exported knowledge conforms
-	// to: "1.0".
-	SpecificationVersion = "1.0"
+	// to: "1.1" (standard-111-bump: mbr- token family + assigned-to).
+	SpecificationVersion = "1.1"
+	// LegacySpecificationVersion is the previous standard version still
+	// accepted at import (standard-111-bump): packages exported against
+	// 1.0 remain readable; exports always declare the current version.
+	LegacySpecificationVersion = "1.0"
 	// ExchangeFormatVersion is the version of the Exchange Contract the
 	// package is written against: "1".
 	ExchangeFormatVersion = "1"

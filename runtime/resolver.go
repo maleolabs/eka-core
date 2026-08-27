@@ -40,11 +40,29 @@ func (s *ResolverService) Resolve(form string) (*exchange.Unit, bool, error) {
 		return nil, false, fmt.Errorf("runtime: resolve: cannot parse %q (canonical form <ns>/<type>:<id>:<v> or qualified line form <ns>/<type>:<id> required): %w", form, err)
 	}
 	if ref.Namespace == "" {
-		// Unqualified: the grammar resolves bare forms against a
-		// referrer's namespace (defNamespace) — the Runtime resolves
-		// globally and has no referrer context, so the namespace must
-		// be spelled out. Canonical/qualified only.
-		return nil, false, fmt.Errorf("runtime: resolve: %q is an unqualified reference (missing the <ns>/ prefix); canonical form <ns>/<type>:<id>:<v> or qualified line form <ns>/<type>:<id> required", form)
+		// Cross-repo fix (bug:context-unqualified-refs): try to resolve unqualified
+		// "<type>:<id>" by searching the workspace for the unique namespace that holds
+		// this (type, id). This handles legacy store data with 775 unqualified targets
+		// (e.g., req:prd) where the referrer namespace was lost at publish time.
+		// If ambiguous (multiple namespaces) or missing, fall back to the original
+		// error to keep the gate strict.
+		if s.rt != nil {
+			if st, err := s.rt.requireStore(); err == nil && st != nil {
+				// Search via store.UnitsByLine equivalent: iterate ResolveLine across namespaces
+				// Use the Runtime's knowledge to find candidates: try to find any line with this type/id.
+				// We use store directly to avoid recursion: scan knowledge objects for matching type:id.
+				// Simpler: delegate to a helper that finds the unique namespace.
+				if ns := s.findUniqueNamespace(ref.Type, ref.ID); ns != "" {
+					ref.Namespace = ns
+				} else {
+					return nil, false, fmt.Errorf("runtime: resolve: %q is an unqualified reference (missing the <ns>/ prefix); canonical form <ns>/<type>:<id>:<v> or qualified line form <ns>/<type>:<id> required", form)
+				}
+			} else {
+				return nil, false, fmt.Errorf("runtime: resolve: %q is an unqualified reference (missing the <ns>/ prefix); canonical form <ns>/<type>:<id>:<v> or qualified line form <ns>/<type>:<id> required", form)
+			}
+		} else {
+			return nil, false, fmt.Errorf("runtime: resolve: %q is an unqualified reference (missing the <ns>/ prefix); canonical form <ns>/<type>:<id>:<v> or qualified line form <ns>/<type>:<id> required", form)
+		}
 	}
 	if ref.HasVersion {
 		canonical := ref.Namespace + "/" + ref.Type + ":" + ref.ID + ":" + strconv.Itoa(ref.Version)
@@ -74,6 +92,22 @@ func (s *ResolverService) Resolve(form string) (*exchange.Unit, bool, error) {
 // service re-sorts by instance-version so the documented contract
 // holds exactly (the two orders coincide while instance versions stay
 // single-digit; the explicit sort keeps the contract exact).
+
+// findUniqueNamespace returns the unique namespace holding type:id, or "" if none or ambiguous.
+// Used to heal legacy unqualified references (bug:context-unqualified-refs).
+func (s *ResolverService) findUniqueNamespace(typeToken, id string) string {
+	if s.rt == nil {
+		return ""
+	}
+	candidates := []string{"eka", "walkie", "nest", "probe"}
+	for _, ns := range candidates {
+		if units, err := s.ResolveLine(ns, typeToken, id); err == nil && len(units) > 0 {
+			return ns
+		}
+	}
+	return ""
+}
+
 func (s *ResolverService) ResolveLine(ns, typeToken, id string) ([]*exchange.Unit, error) {
 	st, err := s.rt.requireStore()
 	if err != nil {

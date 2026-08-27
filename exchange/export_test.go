@@ -845,7 +845,7 @@ func TestHeaderContractFacts(t *testing.T) {
 	var header Header
 	mustUnmarshal(t, entries, "header.json", &header)
 	if header.SerializationVersion != SerializationVersion || header.ExchangeFormatVersion != "1" ||
-		header.SpecificationVersion != "1.0" || header.Exporter != "eka" {
+		header.SpecificationVersion != "1.1" || header.Exporter != "eka" {
 		t.Errorf("header facts = %+v", header)
 	}
 	// Manifest echoes the same versions (RSF §8.1 self-consistency).
