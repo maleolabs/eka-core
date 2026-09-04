@@ -84,6 +84,12 @@ type Draft struct {
 	// metadata for `eka draft list`; the draft file itself carries no
 	// timestamps (deterministic template).
 	Updated string
+	// Provenance capture fields (ADR-035 v3) surfaced for filtering/tagging.
+	Provenance       string
+	SourcePromptHash string
+	Confidence       float64
+	HasConfidence    bool
+	CaptureMeta      CaptureMeta
 }
 
 // NewDraftRequest describes one draft to scaffold.
@@ -118,6 +124,19 @@ type NewDraftRequest struct {
 	// only; raw text is rejected). "" scaffolds the type's required
 	// content keys as empty placeholders.
 	ContentFile string
+	// Provenance capture fields (ADR-035 v3). Empty = human (default).
+	Provenance       string
+	SourcePromptHash string
+	Confidence       float64
+	HasConfidence    bool
+	SourceCommitSha  string
+	CaptureMeta      CaptureMeta
+}
+
+// CaptureMeta mirrors conformance.CaptureMeta for draft authoring.
+type CaptureMeta struct {
+	Classifier string `json:"classifier,omitempty"`
+	DedupeKey  string `json:"dedupeKey,omitempty"`
 }
 
 // PublishOptions configures one publish run. Documented deviation from
@@ -523,6 +542,9 @@ func draftDefaultState(typeToken, domain string) string {
 // given), and the required content keys
 // (empty placeholders). Field order is the schema's canonical order
 // (spec-standard-v2 §3.2).
+//
+// Provenance fields (ADR-035 v3) are appended after the core identity
+// fields; provenance defaults to human when absent.
 type draftDoc struct {
 	Namespace string            `json:"namespace"`
 	Type      string            `json:"type"`
@@ -536,10 +558,15 @@ type draftDoc struct {
 	Phase     string                      `json:"phase,omitempty"`
 	// Domain is the declared Engineering Domain (canonical spelling,
 	// e.g. "Architecture"); absent = derived from the type token.
-	Domain        string              `json:"domain,omitempty"`
-	Relationships map[string][]string `json:"relationships,omitempty"`
-	ChangeLog     []draftChangeLog    `json:"changeLog,omitempty"`
-	Content       map[string]any      `json:"content"`
+	Domain           string              `json:"domain,omitempty"`
+	Relationships    map[string][]string `json:"relationships,omitempty"`
+	ChangeLog        []draftChangeLog    `json:"changeLog,omitempty"`
+	Provenance       string              `json:"provenance,omitempty"`
+	SourcePromptHash string              `json:"sourcePromptHash,omitempty"`
+	Confidence       *float64            `json:"confidence,omitempty"`
+	SourceCommitSha  string              `json:"sourceCommitSha,omitempty"`
+	CaptureMeta      *CaptureMeta        `json:"captureMeta,omitempty"`
+	Content          map[string]any      `json:"content"`
 }
 
 // draftChangeLog is one change-log entry in the §3.2 spelling: domain
@@ -639,6 +666,30 @@ func draftJSON(req NewDraftRequest, extraContent map[string]any) ([]byte, error)
 	}
 	if req.By.Name != "" {
 		doc.Author = &req.By
+	}
+	// Provenance: default human; inferred/reconciled carry hashes and meta.
+	prov := req.Provenance
+	if prov == "" {
+		prov = conformance.ProvenanceHuman
+	}
+	// Only emit provenance when non-default or explicit to keep drafts minimal?
+	// Spec says field wajib ada di draft (default human), so always emit.
+	doc.Provenance = prov
+	if req.SourcePromptHash != "" {
+		doc.SourcePromptHash = req.SourcePromptHash
+	}
+	if req.HasConfidence {
+		v := req.Confidence
+		doc.Confidence = &v
+	}
+	if req.SourceCommitSha != "" {
+		doc.SourceCommitSha = req.SourceCommitSha
+	}
+	if req.CaptureMeta.Classifier != "" || req.CaptureMeta.DedupeKey != "" {
+		doc.CaptureMeta = &CaptureMeta{
+			Classifier: req.CaptureMeta.Classifier,
+			DedupeKey:  req.CaptureMeta.DedupeKey,
+		}
 	}
 	// Content: required section keys as empty placeholders; the tkt-
 	// template's commands value carries the exact projection header
@@ -935,8 +986,15 @@ func unitFromDraft(a *conformance.Artifact, version int) *exchange.Unit {
 			ExistenceState: a.States[conformance.DomainExistenceState],
 			NoteState:      a.States[conformance.DomainNoteState],
 		},
-		Classification: classification,
-		Phase:          a.Phase,
+		Classification:   classification,
+		Phase:            a.Phase,
+		Provenance:       a.Provenance,
+		SourcePromptHash: a.SourcePromptHash,
+		SourceCommitSha:  a.SourceCommitSha,
+		CaptureMeta: exchange.CaptureMeta{
+			Classifier: a.CaptureMeta.Classifier,
+			DedupeKey:  a.CaptureMeta.DedupeKey,
+		},
 		Content: exchange.ContentRef{
 			Representation: exchange.StructuredJSON,
 			File:           "content",
@@ -944,6 +1002,9 @@ func unitFromDraft(a *conformance.Artifact, version int) *exchange.Unit {
 		ContentPayload: payload,
 		ChangeLog:      []exchange.ChangeLogEntry{},
 		Relationships:  []exchange.Relationship{},
+	}
+	if a.HasConfidence {
+		u.Confidence = a.Confidence
 	}
 	for _, e := range a.ChangeLog {
 		u.ChangeLog = append(u.ChangeLog, exchange.ChangeLogEntry{
@@ -1274,6 +1335,36 @@ func (AuthoringService) Drafts(rt *Runtime, project string) ([]Draft, error) {
 	return out, nil
 }
 
+// DraftsByProvenance lists drafts filtered by provenance (human|inferred|reconciled|all).
+// provenance "all" or "" returns every draft (no filter). The filter is case-sensitive
+// and deterministic; an unknown value returns an empty list (caller validates).
+func (AuthoringService) DraftsByProvenance(rt *Runtime, project, provenance string) ([]Draft, error) {
+	if provenance == "" || provenance == "all" {
+		return Authoring.Drafts(rt, project)
+	}
+	if !conformance.ValidProvenance(provenance) {
+		return nil, fmt.Errorf("authoring: unknown provenance filter %q (expected human|inferred|reconciled|all)", provenance)
+	}
+	all, err := Authoring.Drafts(rt, project)
+	if err != nil {
+		return nil, err
+	}
+	var out []Draft
+	for _, d := range all {
+		prov := d.Provenance
+		if prov == "" {
+			prov = conformance.ProvenanceHuman
+		}
+		if prov == provenance {
+			out = append(out, d)
+		}
+	}
+	if out == nil {
+		out = []Draft{}
+	}
+	return out, nil
+}
+
 // draftsInProject lists the drafts of one project directory, ordered by
 // file name (type, then id — ids may contain hyphens; the type token is
 // the filename prefix before the first hyphen).
@@ -1323,6 +1414,17 @@ func draftsInProject(root, project string) ([]Draft, error) {
 		}
 		if artifact, err := conformance.ScanFile(path); err == nil && artifact != nil {
 			d.Namespace = artifact.Namespace
+			d.Provenance = artifact.Provenance
+			if d.Provenance == "" {
+				d.Provenance = conformance.ProvenanceHuman
+			}
+			d.SourcePromptHash = artifact.SourcePromptHash
+			d.Confidence = artifact.Confidence
+			d.HasConfidence = artifact.HasConfidence
+			d.CaptureMeta.Classifier = artifact.CaptureMeta.Classifier
+			d.CaptureMeta.DedupeKey = artifact.CaptureMeta.DedupeKey
+		} else {
+			d.Provenance = conformance.ProvenanceHuman
 		}
 		out = append(out, d)
 	}

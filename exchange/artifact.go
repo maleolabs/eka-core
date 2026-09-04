@@ -90,6 +90,18 @@ func (u *Unit) ToArtifact() *conformance.Artifact {
 			Date: e.Date, Domain: e.Domain, From: e.From, To: e.To, By: e.By.Name, ByKind: e.By.Kind,
 		})
 	}
+	a.Provenance = u.Provenance
+	if a.Provenance == "" {
+		a.Provenance = conformance.ProvenanceHuman
+	}
+	a.SourcePromptHash = u.SourcePromptHash
+	if u.Confidence != 0 {
+		a.Confidence = u.Confidence
+		a.HasConfidence = true
+	}
+	a.SourceCommitSha = u.SourceCommitSha
+	a.CaptureMeta.Classifier = u.CaptureMeta.Classifier
+	a.CaptureMeta.DedupeKey = u.CaptureMeta.DedupeKey
 	a.BodyLines = strings.Split(string(u.ContentPayload), "\n")
 	if u.Content.Representation == StructuredJSON {
 		// The structured content object: the canonical payload parses

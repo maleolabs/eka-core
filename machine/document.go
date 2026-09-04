@@ -48,10 +48,16 @@ type Document struct {
 	StateVector    StateVector                 `json:"stateVector"`
 	Phase          string                      `json:"phase,omitempty"`
 	Classification *Classification             `json:"classification,omitempty"`
-	Relationships  []Relationship              `json:"relationships,omitempty"`
-	ChangeLog      []ChangeLogEntry            `json:"changeLog,omitempty"`
-	Content        *Content                    `json:"content,omitempty"`
-	ObjectHash     string                      `json:"objectHash"`
+	// Provenance capture fields (ADR-035 v3, additive; omitempty keeps old payloads valid).
+	Provenance       string           `json:"provenance,omitempty"`
+	Confidence       *float64         `json:"confidence,omitempty"`
+	SourcePromptHash string           `json:"sourcePromptHash,omitempty"`
+	SourceCommitSha  string           `json:"sourceCommitSha,omitempty"`
+	CaptureMeta      *CaptureMeta     `json:"captureMeta,omitempty"`
+	Relationships    []Relationship   `json:"relationships,omitempty"`
+	ChangeLog        []ChangeLogEntry `json:"changeLog,omitempty"`
+	Content          *Content         `json:"content,omitempty"`
+	ObjectHash       string           `json:"objectHash"`
 	// Retrieval options (ADR-015 additive contract): appended at the
 	// END of the schema — absent until a retrieval flag asks for them,
 	// so the default document is byte-identical to the pre-option
@@ -121,6 +127,12 @@ type Classification struct {
 	Dimension           string   `json:"dimension,omitempty"`
 	DimensionsSecondary []string `json:"dimensionsSecondary,omitempty"`
 	Domain              string   `json:"domain,omitempty"`
+}
+
+// CaptureMeta holds classifier/dedupe metadata (ADR-035 v3).
+type CaptureMeta struct {
+	Classifier string `json:"classifier,omitempty"`
+	DedupeKey  string `json:"dedupeKey,omitempty"`
 }
 
 // Content is the representation-tagged knowledge payload: the opaque
@@ -195,6 +207,10 @@ func NewDocument(u *exchange.Unit) (*Document, error) {
 			NoteState:      u.StateVector.NoteState,
 		},
 		Phase: u.Phase,
+		// Provenance is additive; human is the default but omitempty keeps old payloads valid.
+		Provenance:       u.Provenance,
+		SourcePromptHash: u.SourcePromptHash,
+		SourceCommitSha:  u.SourceCommitSha,
 		// The content pointer: NewDocument always sets it, so the
 		// default document carries content exactly as before — the
 		// pointer (plus omitempty) exists so retrieval options can
@@ -202,6 +218,13 @@ func NewDocument(u *exchange.Unit) (*Document, error) {
 		// default schema.
 		Content:    content,
 		ObjectHash: u.Digest,
+	}
+	if u.Confidence != 0 {
+		v := u.Confidence
+		doc.Confidence = &v
+	}
+	if u.CaptureMeta.Classifier != "" || u.CaptureMeta.DedupeKey != "" {
+		doc.CaptureMeta = &CaptureMeta{Classifier: u.CaptureMeta.Classifier, DedupeKey: u.CaptureMeta.DedupeKey}
 	}
 	if u.Classification.Dimension != "" || len(u.Classification.DimensionsSecondary) > 0 || u.Classification.Domain != "" {
 		c := Classification{

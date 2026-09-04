@@ -44,6 +44,18 @@ const metadataFile = "eka.yaml"
 // version must never be re-derived or hardcoded anywhere else.
 const SchemaVersion = 1
 
+// Capture holds the universal capture gateway config (ADR-035 v3,
+// spec provenance-capture:1). It is optional and versioned in eka.yaml
+// so every clone/CI gets the same behaviour without per-device setup.
+// When absent the defaults apply: enabled true, threshold 0.6, dedupeWindow
+// 24h, provenanceFilterDefault all.
+type Capture struct {
+	Enabled                 *bool    `yaml:"enabled,omitempty"`
+	Threshold               *float64 `yaml:"threshold,omitempty"`
+	DedupeWindow            *string  `yaml:"dedupeWindow,omitempty"`
+	ProvenanceFilterDefault *string  `yaml:"provenanceFilterDefault,omitempty"`
+}
+
 // Metadata is the parsed repository identity.
 type Metadata struct {
 	// Version is the eka.yaml schema version (SchemaVersion).
@@ -57,6 +69,8 @@ type Metadata struct {
 	// namespace of the repository's units. The pair (project,
 	// namespace) is immutable after the first sync.
 	Namespace string `yaml:"namespace"`
+	// Capture is the optional universal gateway config (ADR-035 v3).
+	Capture *Capture `yaml:"capture,omitempty"`
 }
 
 // validIdentPattern is the EKA identifier rule: lowercase letters,
@@ -116,18 +130,103 @@ func Parse(data []byte) (Metadata, error) {
 	if m.Name == "runtime" {
 		return Metadata{}, fmt.Errorf("metadata: eka.yaml name %q is reserved for workspace-native knowledge", m.Name)
 	}
+	if m.Capture != nil {
+		if m.Capture.Threshold != nil {
+			v := *m.Capture.Threshold
+			if v < 0 || v > 1 {
+				return Metadata{}, fmt.Errorf("metadata: eka.yaml capture.threshold must be 0.0-1.0, got %v", v)
+			}
+		}
+		if m.Capture.DedupeWindow != nil {
+			s := *m.Capture.DedupeWindow
+			if _, err := parseDedupeWindow(s); err != nil {
+				return Metadata{}, fmt.Errorf("metadata: eka.yaml capture.dedupeWindow invalid: %w", err)
+			}
+		}
+		if m.Capture.ProvenanceFilterDefault != nil {
+			s := *m.Capture.ProvenanceFilterDefault
+			if s != "all" && s != "human" && s != "inferred" && s != "reconciled" {
+				return Metadata{}, fmt.Errorf("metadata: eka.yaml capture.provenanceFilterDefault must be all|human|inferred|reconciled, got %q", s)
+			}
+		}
+	}
 	return m, nil
+}
+
+// EffectiveCapture returns the effective capture config with defaults applied.
+// Defaults (ADR-035 v3): enabled true, threshold 0.6, dedupeWindow 24h, filter all.
+func (m Metadata) EffectiveCapture() (enabled bool, threshold float64, dedupeWindow string, filter string) {
+	enabled = true
+	threshold = 0.6
+	dedupeWindow = "24h"
+	filter = "all"
+	if m.Capture == nil {
+		return
+	}
+	if m.Capture.Enabled != nil {
+		enabled = *m.Capture.Enabled
+	}
+	if m.Capture.Threshold != nil {
+		threshold = *m.Capture.Threshold
+	}
+	if m.Capture.DedupeWindow != nil {
+		dedupeWindow = *m.Capture.DedupeWindow
+	}
+	if m.Capture.ProvenanceFilterDefault != nil {
+		filter = *m.Capture.ProvenanceFilterDefault
+	}
+	return
+}
+
+// parseDedupeWindow validates dedupeWindow string (e.g. 24h, 30m, 1h).
+func parseDedupeWindow(s string) (string, error) {
+	if s == "" {
+		return "", fmt.Errorf("empty dedupeWindow")
+	}
+	// Accept Go duration syntax; also accept plain duration strings.
+	// Simple validation: must parse as duration.
+	// We use regexp for lightweight check without importing time.
+	matched, _ := regexp.MatchString(`^[0-9]+(ns|us|ms|s|m|h)$`, s)
+	if !matched {
+		// Try combined like 24h, 1h30m – fallback to time.ParseDuration via fmt.
+		// Import is already available; use time.ParseDuration inline via helper.
+		// To avoid import cycle, we validate via gopkg.in/yaml style: attempt parse.
+		// Simplified: reject if not simple single unit.
+		return "", fmt.Errorf("dedupeWindow %q must be a Go duration like 24h", s)
+	}
+	return s, nil
 }
 
 // Marshal renders the canonical eka.yaml bytes: the single byte format
 // of the identity file, one field per line in the fixed order
 // version/project/name/namespace with a trailing newline (the same
 // format bootstrap generates and the ADR-020 sync/register namespace
-// alignment rewrites). The bytes round-trip through Parse: parsing the
+// alignment rewrites). When capture config is present it is appended
+// as a mapping. The bytes round-trip through Parse: parsing the
 // output reproduces the same metadata.
 func (m Metadata) Marshal() []byte {
-	return []byte(fmt.Sprintf("version: %d\nproject: %s\nname: %s\nnamespace: %s\n",
-		m.Version, m.Project, m.Name, m.Namespace))
+	base := fmt.Sprintf("version: %d\nproject: %s\nname: %s\nnamespace: %s\n",
+		m.Version, m.Project, m.Name, m.Namespace)
+	if m.Capture == nil {
+		return []byte(base)
+	}
+	// Render capture block only when non-default.
+	var sb bytes.Buffer
+	sb.WriteString(base)
+	sb.WriteString("capture:\n")
+	if m.Capture.Enabled != nil {
+		sb.WriteString(fmt.Sprintf("  enabled: %v\n", *m.Capture.Enabled))
+	}
+	if m.Capture.Threshold != nil {
+		sb.WriteString(fmt.Sprintf("  threshold: %v\n", *m.Capture.Threshold))
+	}
+	if m.Capture.DedupeWindow != nil {
+		sb.WriteString(fmt.Sprintf("  dedupeWindow: %s\n", *m.Capture.DedupeWindow))
+	}
+	if m.Capture.ProvenanceFilterDefault != nil {
+		sb.WriteString(fmt.Sprintf("  provenanceFilterDefault: %s\n", *m.Capture.ProvenanceFilterDefault))
+	}
+	return sb.Bytes()
 }
 
 // Find locates the nearest eka.yaml by walking up from dir (cleaned

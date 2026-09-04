@@ -252,6 +252,15 @@ type Unit struct {
 	// Phase is the context attribute on planning/scope artifacts
 	// (Exchange §8.4); outside the State Vector, never a State Domain.
 	Phase string `json:"phase,omitempty"`
+	// Provenance capture fields (ADR-035 v3 + spec provenance-capture:1).
+	// Provenance is human|inferred|reconciled (human default), carried
+	// in the unit envelope (non-breaking, omitempty keeps old payloads
+	// valid) and mirrored from draft top-level fields.
+	Provenance       string      `json:"provenance,omitempty"`
+	SourcePromptHash string      `json:"sourcePromptHash,omitempty"`
+	Confidence       float64     `json:"confidence,omitempty"`
+	SourceCommitSha  string      `json:"sourceCommitSha,omitempty"`
+	CaptureMeta      CaptureMeta `json:"captureMeta,omitempty"`
 	// Content references the representation-tagged payload (RSF §6).
 	Content ContentRef `json:"content"`
 
@@ -342,6 +351,12 @@ type Classification struct {
 	// export, validated on import when present, and optional: packages
 	// without the field derive the domain from the type token.
 	Domain string `json:"domain,omitempty"`
+}
+
+// CaptureMeta holds the classifier/dedupe metadata (ADR-035 v3).
+type CaptureMeta struct {
+	Classifier string `json:"classifier,omitempty"`
+	DedupeKey  string `json:"dedupeKey,omitempty"`
 }
 
 // ContentRef is the representation-tagged payload reference (RSF §6.1):

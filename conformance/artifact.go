@@ -89,6 +89,36 @@ type Artifact struct {
 	// or nested objects. Nil for Markdown artifacts — their content is
 	// the BodyLines the section rules evaluate.
 	ContentFields map[string]any
+
+	// Provenance capture fields (ADR-035 v3 + spec provenance-capture:1).
+	// Provenance is human|inferred|reconciled, default human for drafts
+	// without the field. Persistence: stored as top-level draft fields and
+	// mirrored into content for canonical store (non-breaking).
+	Provenance       string
+	SourcePromptHash string
+	Confidence       float64
+	HasConfidence    bool
+	SourceCommitSha  string
+	CaptureMeta      CaptureMeta
+}
+
+// CaptureMeta holds the classifier/dedupe metadata carried with inferred/
+// reconciled drafts.
+type CaptureMeta struct {
+	Classifier string
+	DedupeKey  string
+}
+
+// Provenance constants (ADR-035 v3).
+const (
+	ProvenanceHuman      = "human"
+	ProvenanceInferred   = "inferred"
+	ProvenanceReconciled = "reconciled"
+)
+
+// validProvenance reports whether p is a valid provenance enum value.
+func ValidProvenance(p string) bool {
+	return p == ProvenanceHuman || p == ProvenanceInferred || p == ProvenanceReconciled
 }
 
 // ChangeLogEntry is one parsed {date, domain, from, to, by} entry.
@@ -225,6 +255,11 @@ var allowedJSONTopLevel = map[string]bool{
 	"relationships":       true,
 	"changeLog":           true,
 	"content":             true,
+	"provenance":          true,
+	"sourcePromptHash":    true,
+	"confidence":          true,
+	"sourceCommitSha":     true,
+	"captureMeta":         true,
 }
 
 // analyzeJSON is the v2.0 JSON-native authoring adapter
@@ -401,6 +436,122 @@ func analyzeJSON(relPath, absPath string, data []byte, requireInstanceVersion bo
 	results = append(results, classifyResults...)
 	if a != nil {
 		a.ContentFields = contentFields
+		// Provenance fields (ADR-035 v3): top-level provenance enum + capture metadata.
+		if v, ok := root["provenance"]; ok {
+			s, ok := v.(string)
+			if !ok {
+				results = append(results, Result{
+					File: relPath, Rule: RuleStructural, Severity: SeverityError,
+					Message: "`provenance` must be a string (human|inferred|reconciled)",
+				})
+			} else if !ValidProvenance(s) {
+				results = append(results, Result{
+					File: relPath, Rule: RuleStructural, Severity: SeverityError,
+					Message: fmt.Sprintf("provenance %q must be one of human|inferred|reconciled", s),
+				})
+			} else {
+				a.Provenance = s
+			}
+		} else {
+			a.Provenance = ProvenanceHuman
+		}
+		if v, ok := root["sourcePromptHash"]; ok {
+			s, ok := v.(string)
+			if !ok || s == "" {
+				results = append(results, Result{
+					File: relPath, Rule: RuleStructural, Severity: SeverityError,
+					Message: "`sourcePromptHash` must be a non-empty hex string",
+				})
+			} else if !isHexString(s, 64) {
+				results = append(results, Result{
+					File: relPath, Rule: RuleStructural, Severity: SeverityError,
+					Message: "`sourcePromptHash` must be a 64-char hex sha256",
+				})
+			} else {
+				a.SourcePromptHash = s
+			}
+		}
+		if v, ok := root["confidence"]; ok {
+			f, ok := asFloat64(v)
+			if !ok {
+				results = append(results, Result{
+					File: relPath, Rule: RuleStructural, Severity: SeverityError,
+					Message: "`confidence` must be a number 0.0-1.0",
+				})
+			} else if f < 0 || f > 1 {
+				results = append(results, Result{
+					File: relPath, Rule: RuleStructural, Severity: SeverityError,
+					Message: fmt.Sprintf("confidence %v must be 0.0-1.0", f),
+				})
+			} else {
+				a.Confidence = f
+				a.HasConfidence = true
+			}
+		}
+		if v, ok := root["sourceCommitSha"]; ok {
+			s, ok := v.(string)
+			if !ok || s == "" {
+				results = append(results, Result{
+					File: relPath, Rule: RuleStructural, Severity: SeverityError,
+					Message: "`sourceCommitSha` must be a non-empty hex string",
+				})
+			} else if !isHexString(s, -1) || len(s) < 7 || len(s) > 40 {
+				results = append(results, Result{
+					File: relPath, Rule: RuleStructural, Severity: SeverityError,
+					Message: "`sourceCommitSha` must be a 7-40 char hex",
+				})
+			} else {
+				a.SourceCommitSha = s
+			}
+		}
+		if v, ok := root["captureMeta"]; ok {
+			m, ok := v.(map[string]any)
+			if !ok {
+				results = append(results, Result{
+					File: relPath, Rule: RuleStructural, Severity: SeverityError,
+					Message: "`captureMeta` must be an object {classifier, dedupeKey}",
+				})
+			} else {
+				if cv, ok := m["classifier"]; ok {
+					if s, ok := cv.(string); ok {
+						a.CaptureMeta.Classifier = s
+					} else {
+						results = append(results, Result{
+							File: relPath, Rule: RuleStructural, Severity: SeverityError,
+							Message: "`captureMeta.classifier` must be a string",
+						})
+					}
+				}
+				if dv, ok := m["dedupeKey"]; ok {
+					if s, ok := dv.(string); ok {
+						if !isHexString(s, 64) && s != "" {
+							results = append(results, Result{
+								File: relPath, Rule: RuleStructural, Severity: SeverityError,
+								Message: "`captureMeta.dedupeKey` must be a 64-char hex hash",
+							})
+						} else {
+							a.CaptureMeta.DedupeKey = s
+						}
+					} else {
+						results = append(results, Result{
+							File: relPath, Rule: RuleStructural, Severity: SeverityError,
+							Message: "`captureMeta.dedupeKey` must be a string",
+						})
+					}
+				}
+				for k := range m {
+					if k != "classifier" && k != "dedupeKey" {
+						results = append(results, Result{
+							File: relPath, Rule: RuleStructural, Severity: SeverityError,
+							Message: fmt.Sprintf("unknown captureMeta field %q", k),
+						})
+					}
+				}
+			}
+		}
+		if a.Provenance == "" {
+			a.Provenance = ProvenanceHuman
+		}
 	}
 	return a, results
 }
@@ -416,6 +567,41 @@ func isStringOrObject(v any) bool {
 		return true
 	}
 	return false
+}
+
+// isHexString reports whether s is hex of expected length (len<0 = any length).
+func isHexString(s string, wantLen int) bool {
+	if wantLen >= 0 && len(s) != wantLen {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+// asFloat64 converts JSON numbers (float64, int, json.Number) to float64.
+func asFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
 }
 
 // jsonTopLevelList renders the allowed top-level field list, sorted

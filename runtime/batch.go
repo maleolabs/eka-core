@@ -49,6 +49,13 @@ type BatchDraft struct {
 	// required-section placeholders (the inline counterpart of
 	// NewDraftRequest.ContentFile). Nil scaffolds the placeholders.
 	Content map[string]any
+	// Provenance capture fields (ADR-035 v3). Empty = human default.
+	Provenance       string
+	SourcePromptHash string
+	Confidence       float64
+	HasConfidence    bool
+	SourceCommitSha  string
+	CaptureMeta      CaptureMeta
 }
 
 // NewDraftBatchRequest describes one batch scaffold run: the shared
@@ -117,15 +124,21 @@ func (AuthoringService) NewDraftBatch(rt *Runtime, req NewDraftBatchRequest) (*N
 	var created []*Draft
 	for i, d := range req.Drafts {
 		draft, err := newDraftFile(ws, NewDraftRequest{
-			Project:       req.Project,
-			Namespace:     req.Namespace,
-			Type:          d.Type,
-			ID:            d.ID,
-			Dimension:     d.Dimension,
-			Phase:         d.Phase,
-			Domain:        d.Domain,
-			By:            req.By,
-			Relationships: d.Relationships,
+			Project:          req.Project,
+			Namespace:        req.Namespace,
+			Type:             d.Type,
+			ID:               d.ID,
+			Dimension:        d.Dimension,
+			Phase:            d.Phase,
+			Domain:           d.Domain,
+			By:               req.By,
+			Relationships:    d.Relationships,
+			Provenance:       d.Provenance,
+			SourcePromptHash: d.SourcePromptHash,
+			Confidence:       d.Confidence,
+			HasConfidence:    d.HasConfidence,
+			SourceCommitSha:  d.SourceCommitSha,
+			CaptureMeta:      d.CaptureMeta,
 		}, d.Content)
 		if err != nil {
 			// All-or-nothing: remove EVERY draft this run created. A

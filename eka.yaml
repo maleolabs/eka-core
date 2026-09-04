@@ -2,3 +2,8 @@ version: 1
 project: eka
 name: eka-core
 namespace: eka
+capture:
+  enabled: true
+  threshold: 0.6
+  dedupeWindow: 24h
+  provenanceFilterDefault: all
