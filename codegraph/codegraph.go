@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	MaxSymbols = 32
-	MaxUnits   = 64
+	MaxSymbols    = 32
+	MaxUnits      = 64
+	MaxCandidates = 64
 )
 
 type File struct {
@@ -242,6 +243,249 @@ type Provenance struct {
 	Source     string  `json:"source"`
 	Method     string  `json:"method"`
 	Confidence float64 `json:"confidence"`
+}
+
+// DiscoverRequest is natural query plus optional scope filter.
+type DiscoverRequest struct {
+	Query string `json:"query"`
+	Scope string `json:"scope,omitempty"`
+	Limit int    `json:"limit"`
+}
+
+// Candidate is one deterministic discovery result.
+type Candidate struct {
+	Path       string   `json:"path"`
+	Language   string   `json:"language"`
+	Digest     string   `json:"digest"`
+	Size       int64    `json:"size"`
+	Reason     string   `json:"reason"`
+	Confidence float64  `json:"confidence"`
+	Symbols    []Symbol `json:"symbols,omitempty"`
+}
+
+// DiscoverResponse is bounded deterministic code_discover output.
+type DiscoverResponse struct {
+	Schema      string          `json:"schema"`
+	Query       DiscoverRequest `json:"query"`
+	IndexDigest string          `json:"indexDigest"`
+	Provenance  Provenance      `json:"provenance"`
+	Candidates  []Candidate     `json:"candidates"`
+	Fallback    bool            `json:"fallback,omitempty"`
+}
+
+// GetRequest is exact retrieval by slash path.
+type GetRequest struct {
+	Path string `json:"path"`
+}
+
+// GetResponse is exact code_get retrieval.
+type GetResponse struct {
+	Schema      string     `json:"schema"`
+	Query       GetRequest `json:"query"`
+	IndexDigest string     `json:"indexDigest"`
+	Provenance  Provenance `json:"provenance"`
+	Unit        Unit       `json:"unit"`
+	Symbols     []Symbol   `json:"symbols,omitempty"`
+	Refs        []Ref      `json:"refs,omitempty"`
+}
+
+// Discover returns bounded deterministic candidates with reason/confidence.
+// Natural language query is tokenized deterministically; scope filters paths.
+// Language-agnostic: unsupported files still score via path. Fallback to bounded inventory when no match.
+func Discover(i Index, q DiscoverRequest) (DiscoverResponse, error) {
+	if strings.TrimSpace(q.Query) == "" {
+		return DiscoverResponse{}, fmt.Errorf("query must be non-empty")
+	}
+	limit := q.Limit
+	if limit == 0 {
+		limit = 16
+	}
+	if limit < 1 || limit > MaxCandidates {
+		return DiscoverResponse{}, fmt.Errorf("limit must be 1..%d", MaxCandidates)
+	}
+	tokens := tokenize(q.Query)
+	scope := strings.ToLower(strings.TrimSpace(q.Scope))
+	type scored struct {
+		cand Candidate
+		sc   int
+	}
+	// Build file->symbols index for reason enrichment.
+	fileSymbols := map[string][]Symbol{}
+	for _, s := range i.Symbols {
+		fileSymbols[s.File] = append(fileSymbols[s.File], s)
+	}
+	var list []scored
+	maxScore := 0
+	for _, f := range i.Files {
+		if scope != "" && !strings.Contains(strings.ToLower(f.Path), scope) {
+			continue
+		}
+		score := 0
+		reasons := []string{}
+		lowerPath := strings.ToLower(f.Path)
+		for _, tok := range tokens {
+			if strings.Contains(lowerPath, tok) {
+				score += 3
+				reasons = append(reasons, "path match: "+tok)
+			}
+		}
+		// Full query substring boost.
+		if strings.Contains(lowerPath, strings.ToLower(q.Query)) {
+			score += 2
+		}
+		// Symbol matches.
+		for _, s := range fileSymbols[f.Path] {
+			lowerName := strings.ToLower(s.Name)
+			for _, tok := range tokens {
+				if strings.Contains(lowerName, tok) {
+					score += 5
+					reasons = append(reasons, "symbol match: "+s.Name)
+					break
+				}
+			}
+			if strings.EqualFold(s.Name, q.Query) {
+				score += 5
+			}
+		}
+		// Import matches (language-agnostic via refs)
+		for _, r := range i.Refs {
+			if r.Path == f.Path {
+				lowerRef := strings.ToLower(r.Name)
+				for _, tok := range tokens {
+					if strings.Contains(lowerRef, tok) {
+						score += 2
+						reasons = append(reasons, "import match: "+r.Name)
+						break
+					}
+				}
+			}
+		}
+		reason := strings.Join(dedup(reasons), ", ")
+		if reason == "" && score > 0 {
+			reason = "path match"
+		}
+		c := Candidate{Path: f.Path, Language: f.Language, Digest: f.Digest, Size: f.Size, Reason: reason, Symbols: fileSymbols[f.Path]}
+		list = append(list, scored{cand: c, sc: score})
+		if score > maxScore {
+			maxScore = score
+		}
+	}
+	// Compute confidence normalized to max.
+	hasMatch := maxScore > 0
+	fallback := !hasMatch
+	for n := range list {
+		if maxScore > 0 {
+			list[n].cand.Confidence = float64(list[n].sc) / float64(maxScore)
+			// Round to 2 decimals deterministic.
+			list[n].cand.Confidence = float64(int(list[n].cand.Confidence*100+0.5)) / 100
+		} else {
+			list[n].cand.Confidence = 0
+			if list[n].cand.Reason == "" {
+				list[n].cand.Reason = "fallback inventory"
+			}
+		}
+		// Cap symbols per candidate to deterministic 8.
+		if len(list[n].cand.Symbols) > 8 {
+			list[n].cand.Symbols = list[n].cand.Symbols[:8]
+		}
+	}
+	// Sort: score desc, then path asc.
+	sort.Slice(list, func(a, b int) bool {
+		if list[a].sc != list[b].sc {
+			return list[a].sc > list[b].sc
+		}
+		return list[a].cand.Path < list[b].cand.Path
+	})
+	cands := []Candidate{}
+	for _, s := range list {
+		if hasMatch && s.sc == 0 {
+			continue
+		}
+		cands = append(cands, s.cand)
+		if len(cands) >= limit {
+			break
+		}
+	}
+	// Ambiguity: multiple top-score candidates remain — keep ordered list, confidence ties at 1.
+	// Fallback inventory already bounded.
+	provenance := Provenance{Source: "local-index", Method: "deterministic-discover", Confidence: 1}
+	if fallback {
+		provenance.Method = "deterministic-discover+fallback"
+		provenance.Confidence = 0.1
+	}
+	return DiscoverResponse{Schema: "eka/code-discover/1", Query: q, IndexDigest: i.Digest, Provenance: provenance, Candidates: cands, Fallback: fallback}, nil
+}
+
+// Get returns exact retrieval for one slash path. Language-agnostic.
+func Get(i Index, q GetRequest) (GetResponse, error) {
+	p := filepath.ToSlash(filepath.Clean(strings.TrimSpace(q.Path)))
+	if p == "" || p == "." {
+		return GetResponse{}, fmt.Errorf("path must be non-empty")
+	}
+	// Disallow traversing outside root.
+	if strings.Contains(p, "..") {
+		return GetResponse{}, fmt.Errorf("path must not contain ..")
+	}
+	var found *File
+	for n := range i.Files {
+		if i.Files[n].Path == p {
+			found = &i.Files[n]
+			break
+		}
+	}
+	if found == nil {
+		return GetResponse{}, fmt.Errorf("code_get: file not found: %q", q.Path)
+	}
+	b, err := os.ReadFile(filepath.Join(i.Root, filepath.FromSlash(p)))
+	content := ""
+	if err == nil {
+		content = string(b)
+	}
+	unit := Unit{Path: found.Path, Language: found.Language, Digest: found.Digest, Size: found.Size, Content: content}
+	var syms []Symbol
+	for _, s := range i.Symbols {
+		if s.File == p {
+			syms = append(syms, s)
+		}
+	}
+	var refs []Ref
+	for _, r := range i.Refs {
+		if r.Path == p {
+			refs = append(refs, r)
+		}
+	}
+	sort.Slice(syms, func(a, b int) bool { return symbolKey(syms[a]) < symbolKey(syms[b]) })
+	sort.Slice(refs, func(a, b int) bool { return refKey(refs[a]) < refKey(refs[b]) })
+	return GetResponse{Schema: "eka/code-get/1", Query: q, IndexDigest: i.Digest, Provenance: Provenance{Source: "local-index", Method: "deterministic-get", Confidence: 1}, Unit: unit, Symbols: syms, Refs: refs}, nil
+}
+
+func tokenize(s string) []string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "-", " ")
+	s = strings.ReplaceAll(s, "_", " ")
+	s = strings.ReplaceAll(s, "/", " ")
+	s = strings.ReplaceAll(s, ".", " ")
+	fields := strings.Fields(s)
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		f = strings.Trim(f, " \t\n\r.,;:!\"'`()[]{}")
+		if f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func dedup(in []string) []string {
+	m := map[string]bool{}
+	var out []string
+	for _, v := range in {
+		if !m[v] {
+			m[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // Serve selects bounded context. Level 0 inventory, 1 symbols, 2 imports, 3 source snippets.
