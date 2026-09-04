@@ -61,6 +61,7 @@ func entryFor(u *exchange.Unit, role string, number int) Entry {
 		Stratum:       conformance.Stratum(conformance.Domain(domain)),
 		State:         primaryState(u),
 		Role:          role,
+		ObjectHash:    u.Digest,
 	}
 }
 
