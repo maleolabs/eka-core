@@ -10,7 +10,7 @@ engine), the projection engine, the machine interface, and the Context Engine.
 The normative standard text lives in the
 [`eka-standard`](https://github.com/maleolabs/eka-standard) repository; this
 repository is the executable implementation. **eka-core implements EKA
-Standard 1.0.**
+Standard 1.2.**
 
 Module path: `github.com/maleolabs/eka-core`
 
@@ -195,7 +195,7 @@ repo, ok := plugin.OfficialRegistry.Lookup("mcp")
   ./scripts/bump.sh major   # 1.0.0 -> 2.0.0
   ```
 
-- **Standard version:** this library implements **EKA Standard 1.0**. The
+- **Standard version:** this library implements **EKA Standard 1.2**. The
   standard's own version axis (two-component `major.minor`) is independent of
   this library's semver — see the `eka-standard` README.
 
