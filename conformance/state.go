@@ -1,7 +1,8 @@
 package conformance
 
 // This file encodes the EKA v1.0 type/state taxonomy used by the rules:
-// the 28 artifact type tokens (26 + cmt, ADR-019 D3, + mbr, ADR-029),
+// the 29 artifact type tokens (26 + cmt, ADR-019 D3, + mbr, ADR-029,
+// + shr, standard 1.3 sharing object),
 // the 12 knowledge dimensions, the six owned state domains (+ phase
 // context attribute), the value sets per domain, and the forward-only
 // transition tables (Execution State uses the explicit D1 table, ADR-019
@@ -69,8 +70,8 @@ var projectionTypes = map[string]bool{"ctr": true, "tkt": true, "ses": true}
 // informational (Rule 6) and which own the Execution State domain.
 var workItemTypes = map[string]bool{"sto": true, "ts": true, "bug": true, "td": true, "ch": true, "spk": true}
 
-// TypeInfo describes one of the 28 artifact types (26 + cmt, ADR-019
-// D3, + mbr, ADR-029).
+// TypeInfo describes one of the 29 artifact types (26 + cmt, ADR-019
+// D3, + mbr, ADR-029, + shr, standard 1.3).
 type TypeInfo struct {
 	// Token is the frontmatter `type` value, without the trailing dash
 	// used in filenames (e.g. "adr").
@@ -84,10 +85,10 @@ type TypeInfo struct {
 	IsKnowledge bool
 }
 
-// typeTokens is the canonical 28-token table (reference-architecture.md
-// §2.1 — 26 tokens, plus cmt per ADR-019 D3, plus mbr per ADR-029 —
-// validation.md Rule 4). The owned sets follow validation.md Rule 4
-// exactly.
+// typeTokens is the canonical 29-token table (reference-architecture.md
+// §2.1 — 26 tokens, plus cmt per ADR-019 D3, plus mbr per ADR-029, plus
+// shr per standard 1.3 (tokens/shr.md) — validation.md Rule 4). The
+// owned sets follow validation.md Rule 4 exactly.
 var typeTokens = map[string]TypeInfo{
 	"vis":  {Token: "vis", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"str":  {Token: "str", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
@@ -114,6 +115,7 @@ var typeTokens = map[string]TypeInfo{
 	"std":  {Token: "std", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"run":  {Token: "run", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"rel":  {Token: "rel", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
+	"shr":  {Token: "shr", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"gls":  {Token: "gls", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"trc":  {Token: "trc", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"fnd":  {Token: "fnd", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
