@@ -3,8 +3,8 @@ package conformance
 import "testing"
 
 func TestTypeTokenCount(t *testing.T) {
-	if got := len(typeTokens); got != 28 {
-		t.Fatalf("type token table has %d entries, want 28 (26 + cmt, ADR-019 D3, + mbr, ADR-029)", got)
+	if got := len(typeTokens); got != 29 {
+		t.Fatalf("type token table has %d entries, want 29 (26 + cmt, ADR-019 D3, + mbr, ADR-029, + shr, standard 1.3)", got)
 	}
 }
 
@@ -36,6 +36,7 @@ func TestOwnedSets(t *testing.T) {
 		"std":  {DomainContentState, DomainExistenceState},
 		"run":  {DomainContentState, DomainExistenceState},
 		"rel":  {DomainContentState, DomainExistenceState},
+		"shr":  {DomainContentState, DomainExistenceState},
 		"gls":  {DomainContentState, DomainExistenceState},
 		"trc":  {DomainContentState, DomainExistenceState},
 		"fnd":  {DomainContentState, DomainExistenceState},

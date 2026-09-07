@@ -75,7 +75,7 @@ func folderForType(token string) string {
 		return "docs/quality"
 	case "scp", "epc", "plan", "trc":
 		return "docs/planning"
-	case "rel":
+	case "rel", "shr":
 		return "docs/records"
 	case "fnd":
 		return "docs/research"

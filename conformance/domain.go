@@ -6,7 +6,7 @@ import (
 )
 
 // This file implements the Engineering Domain ontology of the EKA v1.1
-// standard: the canonical mapping of the 28 artifact type tokens (26 + cmt, ADR-019 D3, + mbr, ADR-029) and the
+// standard: the canonical mapping of the 29 artifact type tokens (26 + cmt, ADR-019 D3, + mbr, ADR-029, + shr, standard 1.3) and the
 // 12 knowledge dimensions onto the five Engineering Domains, and the
 // five-stratum authority ordering over them (stratum 1 = highest
 // authority).
@@ -19,13 +19,13 @@ import (
 // Grounding: standard/eka-specification-v1.1.md §Engineering Domain
 // (Wave 1 mapping table):
 //
-//	Discovery    (1): vis-, str-, req-, fnd- | intent, requirements, research
+// Discovery    (1): vis-, str-, req-, fnd- | intent, requirements, research
 //	Architecture (2): arc-, adr-, dec-, spec-, std-, gls- | architecture,
 //	                 decisions, specifications, standards, vocabulary
 //	Planning     (3): scp-, epc-, plan-, trc- | planning
 //	Execution    (4): rvw-, ctr-, tkt-, sto-, ts-, bug-, td-, ch-, spk-,
 //	                 ses- | quality
-//	Operations   (5): run-, rel- | operations, records
+//	Operations   (5): run-, rel-, shr- | operations, records
 
 // Domain is one of the five canonical Engineering Domains. The string
 // value is the canonical spelling used in frontmatter, unit.json and the
@@ -61,7 +61,7 @@ var tokenDomain = map[string]Domain{
 	"ch": Execution, "spk": Execution, "ses": Execution, "cmt": Execution,
 	"mbr": Execution,
 	// Operations (5).
-	"run": Operations, "rel": Operations,
+	"run": Operations, "rel": Operations, "shr": Operations,
 }
 
 // dimensionDomain maps every knowledge dimension to its home Engineering
@@ -85,7 +85,7 @@ var dimensionDomain = map[string]Domain{
 
 // DomainForToken returns the home Engineering Domain of an artifact type
 // token. The second return value is false for unknown tokens (a token not
-// in the 28-token table has no home domain).
+// in the 29-token table has no home domain).
 func DomainForToken(token string) (Domain, bool) {
 	d, ok := tokenDomain[token]
 	return d, ok
