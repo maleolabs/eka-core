@@ -9,7 +9,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,51 +49,43 @@ type Index struct {
 	Refs    []Ref    `json:"refs"`
 }
 
+// BuildOptions controls index construction.
+type BuildOptions struct {
+	// FollowSymlinks follows symlinked directories during the walk (default
+	// true). Symlink targets resolve to real paths and each real directory
+	// is visited at most once, so symlink loops terminate. When false,
+	// symlinked entries are skipped entirely.
+	FollowSymlinks bool
+}
+
+// DefaultBuildOptions returns the default options (follow symlinks safely).
+func DefaultBuildOptions() BuildOptions { return BuildOptions{FollowSymlinks: true} }
+
 // Build scans root. Unsupported files remain inventory entries without parsed symbols.
+// Symlinked directories are followed safely with cycle detection.
 func Build(root string) (Index, error) {
-	return build(root, "")
+	return BuildWithOptions(root, DefaultBuildOptions())
+}
+
+// BuildWithOptions scans root with explicit options.
+func BuildWithOptions(root string, opts BuildOptions) (Index, error) {
+	return buildWithOptions(root, "", opts)
 }
 func build(root, skip string) (Index, error) {
+	return buildWithOptions(root, skip, DefaultBuildOptions())
+}
+func buildWithOptions(root, skip string, opts BuildOptions) (Index, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return Index{}, err
 	}
-	idx := Index{Root: abs}
-	err = filepath.WalkDir(abs, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			if path != abs && (d.Name() == ".git" || d.Name() == "vendor" || d.Name() == "node_modules") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		rel, e := filepath.Rel(abs, path)
-		if e != nil {
-			return e
-		}
-		if strings.HasPrefix(rel, ".git/") {
-			return nil
-		}
-		if skip != "" {
-			if same, _ := filepath.Abs(path); same == skip {
-				return nil
-			}
-		}
-		b, e := os.ReadFile(path)
-		if e != nil {
-			return e
-		}
-		sum := sha256.Sum256(b)
-		f := File{Path: filepath.ToSlash(rel), Language: language(path), Digest: hex.EncodeToString(sum[:]), Size: int64(len(b))}
-		if f.Language == "go" {
-			parseGo(path, f.Path, b, &f, &idx)
-		}
-		idx.Files = append(idx.Files, f)
-		return nil
-	})
+	realRoot, err := filepath.EvalSymlinks(abs)
 	if err != nil {
+		realRoot = abs
+	}
+	idx := Index{Root: abs}
+	visited := map[string]bool{realRoot: true}
+	if err := walkDir(abs, abs, realRoot, skip, opts, visited, &idx); err != nil {
 		return Index{}, err
 	}
 	sort.Slice(idx.Files, func(i, j int) bool { return idx.Files[i].Path < idx.Files[j].Path })
@@ -102,6 +93,80 @@ func build(root, skip string) (Index, error) {
 	sort.Slice(idx.Refs, func(i, j int) bool { return refKey(idx.Refs[i]) < refKey(idx.Refs[j]) })
 	idx.Digest = digest(idx.Files)
 	return idx, nil
+}
+
+// walkDir inventories logicalDir (slash-relative index paths derive from it)
+// by reading physicalDir. visited holds resolved real directory paths already
+// traversed; a directory whose real path is in visited is skipped, which
+// terminates symlink loops deterministically.
+func walkDir(abs, logicalDir, physicalDir, skip string, opts BuildOptions, visited map[string]bool, idx *Index) error {
+	entries, err := os.ReadDir(physicalDir)
+	if err != nil {
+		return err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	for _, e := range entries {
+		name := e.Name()
+		logical := filepath.Join(logicalDir, name)
+		rel, err := filepath.Rel(abs, logical)
+		if err != nil {
+			return err
+		}
+		if filepath.ToSlash(rel) == ".git" || strings.HasPrefix(filepath.ToSlash(rel), ".git/") {
+			continue
+		}
+		if skip != "" {
+			if same, _ := filepath.Abs(logical); same == skip {
+				continue
+			}
+		}
+		isLink := e.Type()&os.ModeSymlink != 0
+		if isLink && !opts.FollowSymlinks {
+			continue
+		}
+		// Stat follows a trailing symlink, so a symlink to a directory
+		// classifies as a directory (filepath.WalkDir never does this —
+		// that mismatch caused "read <path>: is a directory").
+		info, err := os.Stat(logical)
+		if err != nil {
+			if isLink {
+				// Broken symlink: nothing to index.
+				continue
+			}
+			return err
+		}
+		if info.IsDir() {
+			if name == ".git" || name == "vendor" || name == "node_modules" {
+				continue
+			}
+			real, err := filepath.EvalSymlinks(logical)
+			if err != nil {
+				if isLink {
+					continue
+				}
+				return err
+			}
+			if visited[real] {
+				continue
+			}
+			visited[real] = true
+			if err := walkDir(abs, logical, real, skip, opts, visited, idx); err != nil {
+				return err
+			}
+			continue
+		}
+		b, err := os.ReadFile(logical)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		f := File{Path: filepath.ToSlash(rel), Language: language(logical), Digest: hex.EncodeToString(sum[:]), Size: int64(len(b))}
+		if f.Language == "go" {
+			parseGo(logical, f.Path, b, &f, idx)
+		}
+		idx.Files = append(idx.Files, f)
+	}
+	return nil
 }
 
 func language(path string) string {
@@ -186,10 +251,15 @@ func Load(path string) (Index, error) {
 
 // LoadOrBuild returns cached index only when root and current inventory digest match.
 func LoadOrBuild(root, cachePath string) (Index, bool, error) {
+	return LoadOrBuildWithOptions(root, cachePath, DefaultBuildOptions())
+}
+
+// LoadOrBuildWithOptions is LoadOrBuild with explicit build options.
+func LoadOrBuildWithOptions(root, cachePath string, opts BuildOptions) (Index, bool, error) {
 	skip, _ := filepath.Abs(cachePath)
 	i, e := Load(cachePath)
 	if e == nil {
-		fresh, e2 := build(root, skip)
+		fresh, e2 := buildWithOptions(root, skip, opts)
 		if e2 != nil {
 			return Index{}, false, e2
 		}
@@ -197,7 +267,7 @@ func LoadOrBuild(root, cachePath string) (Index, bool, error) {
 			return i, true, nil
 		}
 	}
-	fresh, e := build(root, skip)
+	fresh, e := buildWithOptions(root, skip, opts)
 	if e != nil {
 		return Index{}, false, e
 	}
