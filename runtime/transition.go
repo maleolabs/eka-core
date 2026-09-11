@@ -248,7 +248,8 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 
 	// The transitionable types and their state domains: work items own
 	// execution-state (the D1 table), plans own planning-state (draft
-	// -> approved; immutable is the container lock), containers own
+	// -> approved -> immutable -> superseded; immutable is the container
+	// lock, superseded the terminal retirement), containers own
 	// container-state (active -> completed, gated on the all-done
 	// membership rule), knowledge artifacts own content-state (the
 	// content-maturity lifecycle of the type's variant). Disambiguation
@@ -468,12 +469,16 @@ func legalTransitionsHint(from string) string {
 
 // transitionPlanState performs the planning-state branch of the
 // transition pipeline (plan- targets): the forward-only table is
-// draft -> approved. Planning-state immutable is the container lock
-// (protocol §4): it happens atomically with the container birth and
-// cannot be requested directly — approved -> immutable is refused with
-// the lock hint (explicit <to> and --forward alike). No note gates, no
-// active-container confirmation (plan and container transitions are
-// work-item-only gates).
+// draft -> approved -> immutable -> superseded. Planning-state immutable
+// is the container lock (protocol §4): it happens atomically with the
+// container birth and cannot be requested directly — approved ->
+// immutable is refused with the lock hint (explicit <to> and --forward
+// alike). Immutable -> superseded is the sanctioned retirement path:
+// a locked plan whose containers are all completed (none active) may be
+// archived without violating immutability — the transition appends a
+// change-log entry, never edits history. Superseded is terminal. No
+// note gates, no active-container confirmation (plan and container
+// transitions are work-item-only gates).
 func transitionPlanState(st *store.Store, project, sourceRepo string, ref conformance.Reference, current *exchange.Unit, from string, req TransitionRequest, byIdentity conformance.AuthorIdentity) (*TransitionResult, error) {
 	to := req.To
 	if req.Forward || req.Backward {
@@ -488,10 +493,12 @@ func transitionPlanState(st *store.Store, project, sourceRepo string, ref confor
 			to = "approved"
 		case "approved":
 			return nil, planLockRefusal()
-		default: // immutable: the lock is terminal, no forward step.
+		case "immutable":
+			to = "superseded"
+		default: // superseded: retirement is terminal, no forward step.
 			return nil, &TransitionRefusal{
 				Reason: fmt.Sprintf("there is no forward transition from %q in the planning-state table", from),
-				Hint:   "planning-state immutable is the container lock; it is terminal",
+				Hint:   "planning-state superseded is terminal (retired plans stay retired)",
 			}
 		}
 	}
@@ -499,6 +506,26 @@ func transitionPlanState(st *store.Store, project, sourceRepo string, ref confor
 	// refused with the lock hint even when requested explicitly.
 	if from == "approved" && to == "immutable" {
 		return nil, planLockRefusal()
+	}
+	// Retirement: immutable -> superseded, gated on no active container
+	// depending on the plan (the lock protects live executions).
+	if from == "immutable" && to == "superseded" {
+		planLine := ref.Namespace + "/" + ref.Type + ":" + ref.ID
+		offenders, ok := activeContainersForPlan(st, project, planLine)
+		if !ok {
+			return nil, &TransitionRefusal{
+				Reason: "cannot read the project's containers: the retirement gate could not be evaluated",
+				Hint:   "run 'eka sync' first and retry the retirement",
+			}
+		}
+		if len(offenders) > 0 {
+			return nil, &TransitionRefusal{
+				Reason: fmt.Sprintf("plan %s cannot retire: %d active container(s) still derive from it: %s",
+					planLine, len(offenders), strings.Join(offenders, ", ")),
+				Hint: "transition the active containers to completed first",
+			}
+		}
+		return publishStateTransition(st, project, sourceRepo, current, from, to, conformance.DomainPlanningState, byIdentity)
 	}
 	if !(from == "draft" && to == "approved") {
 		return nil, &TransitionRefusal{
@@ -846,15 +873,54 @@ func planLockRefusal() *TransitionRefusal {
 
 // legalPlanningTransitionsHint renders the planning-state destinations
 // of a state for the refusal hint (the forward-only table draft ->
-// approved; immutable is the container lock).
+// approved -> immutable -> superseded; immutable is the container lock,
+// superseded is the terminal retirement).
 func legalPlanningTransitionsHint(from string) string {
 	switch from {
 	case "draft":
 		return `legal transitions from "draft": approved`
 	case "approved":
 		return planLockRefusal().Reason
+	case "immutable":
+		return `legal transitions from "immutable": superseded (retirement; gated on no active container deriving from the plan)`
 	}
-	return `no legal transition from "immutable" (immutable is the container lock; it is terminal)`
+	return `no legal transition from "superseded" (retired plans stay retired)`
+}
+
+// activeContainersForPlan lists the canonical line forms of the project's
+// containers that are active and derive from the given plan line
+// ("<ns>/plan:<id>"), sorted. ok=false when the project cannot be
+// scanned (refuse closed). Containers whose plan reference cannot be
+// resolved are skipped: they cannot be shown to derive from this plan.
+func activeContainersForPlan(st *store.Store, project, planLine string) (offenders []string, ok bool) {
+	units, err := st.UnitsByProject(project)
+	if err != nil {
+		return nil, false
+	}
+	byLine := map[string]*exchange.Unit{}
+	for _, u := range units {
+		if u.Identity.Type != "ctr" {
+			continue
+		}
+		key := u.Identity.Namespace + "/" + u.Identity.Type + ":" + u.Identity.ID
+		if cur, exists := byLine[key]; !exists || u.Identity.InstanceVersion > cur.Identity.InstanceVersion {
+			byLine[key] = u
+		}
+	}
+	for line, u := range byLine {
+		if u.StateVector.ContainerState != "active" {
+			continue
+		}
+		planRef, err := resolveDependsOnPlan(u)
+		if err != nil {
+			continue
+		}
+		if planRef.Namespace+"/plan:"+planRef.ID == planLine {
+			offenders = append(offenders, line)
+		}
+	}
+	sort.Strings(offenders)
+	return offenders, true
 }
 
 // legalContainerTransitionsHint renders the container-state

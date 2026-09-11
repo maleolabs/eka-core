@@ -140,7 +140,7 @@ var dimensionTokens = map[string]bool{
 // Value sets per domain (validation.md Rule 3, protocol.md §2).
 
 var executionStateValues = []string{"planned", "todo", "in-progress", "in-review", "done", "canceled"}
-var planningStateValues = []string{"draft", "approved", "immutable"}
+var planningStateValues = []string{"draft", "approved", "immutable", "superseded"}
 var containerStateValues = []string{"planned", "active", "completed"}
 var existenceStateValues = []string{"active", "archived", "retired"}
 var noteStateValues = []string{"open", "resolved", "dismissed"}
