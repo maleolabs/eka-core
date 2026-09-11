@@ -107,7 +107,8 @@ func lockPlanPuts(st *store.Store, project, sourceRepo string, ctr *exchange.Uni
 	state := plan.StateVector.PlanningState
 
 	// Put 2: the lock — only an approved plan locks. An immutable plan
-	// is the idempotent skip; any other state refuses with the approve
+	// is the idempotent skip; a superseded (retired) plan refuses with
+	// the retirement message; any other state refuses with the approve
 	// hint.
 	if state == "approved" {
 		today := time.Now().Format("2006-01-02")
@@ -140,6 +141,11 @@ func lockPlanPuts(st *store.Store, project, sourceRepo string, ctr *exchange.Uni
 				UpdatedAt:       today,
 			},
 		})
+	} else if state == "superseded" {
+		return nil, nil, &TransitionRefusal{
+			Reason: fmt.Sprintf("the plan %s is retired (planning-state: superseded); retired plans accept no new containers", info.Plan),
+			Hint:   "scaffold a new plan for new work instead",
+		}
 	} else if state != "immutable" {
 		return nil, nil, &TransitionRefusal{
 			Reason: fmt.Sprintf("the plan %s is not approved (planning-state: %s)", info.Plan, state),

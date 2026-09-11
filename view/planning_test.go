@@ -113,7 +113,7 @@ func TestPlanningProjection(t *testing.T) {
 
 	// Plans by planning-state: fixed value order, plan:roadmap-2026 is
 	// approved.
-	wantByState := []StateCount{{"draft", 0}, {"approved", 1}, {"immutable", 0}}
+	wantByState := []StateCount{{"draft", 0}, {"approved", 1}, {"immutable", 0}, {"superseded", 0}}
 	if !reflect.DeepEqual(planning.PlansByState, wantByState) {
 		t.Errorf("PlansByState = %+v, want %+v", planning.PlansByState, wantByState)
 	}
@@ -198,7 +198,7 @@ func TestPlanningProjectionHierarchy(t *testing.T) {
 		t.Errorf("orphans = %v, want %v", gotOrphans, wantOrphans)
 	}
 	// Plans by planning-state: both plans approved.
-	wantByState := []StateCount{{"draft", 0}, {"approved", 2}, {"immutable", 0}}
+	wantByState := []StateCount{{"draft", 0}, {"approved", 2}, {"immutable", 0}, {"superseded", 0}}
 	if !reflect.DeepEqual(planning.PlansByState, wantByState) {
 		t.Errorf("PlansByState = %+v, want %+v", planning.PlansByState, wantByState)
 	}
@@ -271,7 +271,7 @@ func TestPlanningProjectionSubPlan(t *testing.T) {
 		t.Errorf("other sub-plans = %v, want none", subPlanIdentities(planning.Plans[1]))
 	}
 	// Plans by planning-state counts every plan line (roots + sub).
-	wantByState := []StateCount{{"draft", 0}, {"approved", 3}, {"immutable", 0}}
+	wantByState := []StateCount{{"draft", 0}, {"approved", 3}, {"immutable", 0}, {"superseded", 0}}
 	if !reflect.DeepEqual(planning.PlansByState, wantByState) {
 		t.Errorf("PlansByState = %+v, want %+v", planning.PlansByState, wantByState)
 	}

@@ -189,6 +189,7 @@ func TestTransitionPlanRefusals(t *testing.T) {
 	putUnit(t, r, planUnit("roadmap-v1", 1, "approved", planLog("approved")), project, "repo")
 	putUnit(t, r, planUnit("roadmap-v2", 1, "draft", planLog("draft")), project, "repo")
 	putUnit(t, r, planUnit("locked", 1, "immutable", planLog("immutable")), project, "repo")
+	putUnit(t, r, planUnit("retired", 1, "superseded", planLog("superseded")), project, "repo")
 
 	cases := []struct {
 		name string
@@ -200,7 +201,10 @@ func TestTransitionPlanRefusals(t *testing.T) {
 		{"backward", TransitionRequest{Target: "plan:roadmap-v1", Backward: true}, "planning-state is forward-only"},
 		{"explicit immutable from draft", TransitionRequest{Target: "plan:roadmap-v2", To: "immutable"}, "is not in the planning-state table"},
 		{"no-op approved", TransitionRequest{Target: "plan:roadmap-v1", To: "approved"}, "is not in the planning-state table"},
-		{"forward from immutable", TransitionRequest{Target: "plan:locked", Forward: true}, "no forward transition"},
+		{"explicit superseded from draft", TransitionRequest{Target: "plan:roadmap-v2", To: "superseded"}, "is not in the planning-state table"},
+		{"explicit superseded from approved", TransitionRequest{Target: "plan:roadmap-v1", To: "superseded"}, "is not in the planning-state table"},
+		{"forward from superseded", TransitionRequest{Target: "plan:retired", Forward: true}, "no forward transition"},
+		{"explicit approved from superseded", TransitionRequest{Target: "plan:retired", To: "approved"}, "is not in the planning-state table"},
 		{"to approved from immutable", TransitionRequest{Target: "plan:locked", To: "approved"}, "is not in the planning-state table"},
 	}
 	for _, c := range cases {
@@ -226,6 +230,99 @@ func TestTransitionPlanRefusals(t *testing.T) {
 	// Nothing was published by the refusals: the plan is still approved.
 	if state, _ := planState(t, r, "roadmap-v1"); state != "approved" {
 		t.Errorf("planning-state = %q, want approved (refused runs publish nothing)", state)
+	}
+}
+
+// TestTransitionPlanRetirement: immutable -> superseded retires a locked
+// plan through the explicit <to> and through --forward; the change-log
+// entry is appended and the line re-points in place. Superseded is
+// terminal.
+func TestTransitionPlanRetirement(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("locked", 1, "immutable", planLog("immutable")), project, "repo")
+
+	res, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "plan:locked", To: "superseded", By: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("explicit retirement: %v", err)
+	}
+	if res.From != "immutable" || res.To != "superseded" {
+		t.Errorf("result = %+v, want immutable -> superseded", res)
+	}
+	state, logLen := planState(t, r, "locked")
+	if state != "superseded" || logLen != 4 {
+		t.Errorf("planning-state = %q with %d entries, want superseded with 4", state, logLen)
+	}
+
+	// --forward from immutable retires too.
+	putUnit(t, r, planUnit("locked-2", 1, "immutable", planLog("immutable")), project, "repo")
+	res, err = Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "plan:locked-2", Forward: true, By: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("forward retirement: %v", err)
+	}
+	if res.From != "immutable" || res.To != "superseded" {
+		t.Errorf("result = %+v, want immutable -> superseded", res)
+	}
+}
+
+// TestTransitionPlanRetirementGated: a plan with an active container
+// deriving from it cannot retire; once the container completes, the
+// retirement proceeds.
+func TestTransitionPlanRetirementGated(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "immutable", planLog("immutable")), project, "repo")
+	active := plannedCtr("wave-7", "roadmap-v1")
+	active.StateVector.ContainerState = "active"
+	putUnit(t, r, active, project, "repo")
+
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "plan:roadmap-v1", To: "superseded", By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("retirement with active container: err = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Error(), "test-ns/ctr:wave-7") {
+		t.Errorf("refusal = %q, want it to name the active container", refusal.Error())
+	}
+	if state, _ := planState(t, r, "roadmap-v1"); state != "immutable" {
+		t.Errorf("planning-state = %q, want immutable (refused runs publish nothing)", state)
+	}
+
+	// A completed container no longer blocks the retirement.
+	putUnit(t, r, planUnit("roadmap-v2", 1, "immutable", planLog("immutable")), project, "repo")
+	doneCtr := plannedCtr("wave-8", "roadmap-v2")
+	doneCtr.StateVector.ContainerState = "completed"
+	putUnit(t, r, doneCtr, project, "repo")
+	if _, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "plan:roadmap-v2", To: "superseded", By: "test-agent",
+	}); err != nil {
+		t.Fatalf("retirement with only completed containers: %v", err)
+	}
+	if state, _ := planState(t, r, "roadmap-v2"); state != "superseded" {
+		t.Errorf("planning-state = %q, want superseded", state)
+	}
+}
+
+// TestTransitionContainerActivationRefusedSupersededPlan: no new
+// container may activate deriving from a retired plan.
+func TestTransitionContainerActivationRefusedSupersededPlan(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "superseded", planLog("superseded")), project, "repo")
+	putUnit(t, r, plannedCtr("wave-9", "roadmap-v1"), project, "repo")
+
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-9", Forward: true, By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("activation on retired plan: err = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Error(), "retired") {
+		t.Errorf("refusal = %q, want the retirement message", refusal.Error())
 	}
 }
 
