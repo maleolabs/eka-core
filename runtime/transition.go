@@ -540,9 +540,13 @@ func transitionPlanState(st *store.Store, project, sourceRepo string, ref confor
 // transition pipeline (ctr- targets) — the three-state table
 // planned -> active -> completed (Option B):
 //
-//   - ACTIVATION (planned -> active), gated on the exactly-one-active
-//     rule (protocol §3: no OTHER container line may be active) and on
-//     the plan-approval rule (the depends-on plan must be approved);
+//   - ACTIVATION (planned -> active), gated on the one-active-per-
+//     source_repo rule (dec:parallel-container-execution: no OTHER
+//     ACTIVE container may share this container's source_repo) plus
+//     the transitive depends-on/derives-from plan-closure disjointness
+//     gate across active containers of other repositories (a shared
+//     node names the shared plan/edge), and on the plan-approval rule
+//     (the depends-on plan must be approved);
 //     the activation LOCKS the plan (planning-state -> immutable,
 //     protocol §4 lock-atomic-with-generation) atomically with the
 //     activation — one store transaction, so the active container and
@@ -613,7 +617,7 @@ func transitionContainerState(st *store.Store, project, sourceRepo string, ref c
 		others, ok := otherActiveContainers(st, project, ref)
 		if !ok {
 			return nil, &TransitionRefusal{
-				Reason: "cannot read the project's containers: the active-container gate (protocol §3) could not be evaluated",
+				Reason: "cannot read the project's containers: the active-container gate (dec:parallel-container-execution) could not be evaluated",
 				Hint:   "run 'eka sync' first and retry the activation",
 			}
 		}
