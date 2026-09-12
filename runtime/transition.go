@@ -677,7 +677,6 @@ func transitionContainerState(st *store.Store, project, sourceRepo string, ref c
 			}
 		}
 
-
 		today := time.Now().Format("2006-01-02")
 		next := *current // shallow copy; the mutable slices below are rebuilt.
 		next.StateVector.ContainerState = "active"
@@ -982,8 +981,11 @@ func planClosure(st *store.Store, project string, ctr *exchange.Unit) (map[strin
 }
 
 func identityNamespace(line string) string { return strings.SplitN(line, "/", 2)[0] }
-func identityType(line string) string      { rest := line[strings.IndexByte(line, '/')+1:]; return rest[:strings.IndexByte(rest, ':')] }
-func identityID(line string) string        { return line[strings.LastIndexByte(line, ':')+1:] }
+func identityType(line string) string {
+	rest := line[strings.IndexByte(line, '/')+1:]
+	return rest[:strings.IndexByte(rest, ':')]
+}
+func identityID(line string) string { return line[strings.LastIndexByte(line, ':')+1:] }
 
 // containerBareID extracts the bare id of a canonical line form
 // ("<ns>/ctr:<id>" -> "<id>") for the deterministic completion hint.

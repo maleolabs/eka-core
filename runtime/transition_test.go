@@ -819,7 +819,6 @@ func TestTransitionContainerActivationParallelCycleSafe(t *testing.T) {
 	}
 }
 
-
 // TestTransitionPlanRetirementScopeAware: the retirement gate is
 // scope-aware (dec:parallel-container-execution) — an active container
 // in a DIFFERENT source_repo deriving from a DIFFERENT plan never
