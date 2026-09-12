@@ -208,6 +208,36 @@ func TestExecutionProjectionMultipleActive(t *testing.T) {
 	if exec.Container == nil || exec.Container.ID != "wave-1" {
 		t.Errorf("Container = %+v, want the lexicographically smallest (wave-1)", exec.Container)
 	}
+	// Actives reports BOTH active containers, sorted by canonical
+	// identity (the multi-active projection surface).
+	if len(exec.Actives) != 2 {
+		t.Fatalf("Actives = %d containers, want 2 (wave-1 + wave-2)", len(exec.Actives))
+	}
+	if exec.Actives[0].ID != "wave-1" || exec.Actives[1].ID != "wave-2" {
+		t.Errorf("Actives = %v, want [wave-1 wave-2] in canonical order", containerIDs(exec.Actives))
+	}
+	// Boards carries one per-active container board.
+	if len(exec.Boards) != 2 {
+		t.Fatalf("Boards = %d, want 2 (one per active container)", len(exec.Boards))
+	}
+	if exec.Boards[0].Container.ID != "wave-1" || exec.Boards[1].Container.ID != "wave-2" {
+		t.Errorf("Boards order = %v, want [wave-1 wave-2]",
+			[]string{exec.Boards[0].Container.ID, exec.Boards[1].Container.ID})
+	}
+	// The primary board's total equals the primary container's column
+	// total (the two views agree on the same container).
+	if exec.Boards[0].Total != exec.Total {
+		t.Errorf("Boards[0].Total = %d, want %d (primary container agrees with Columns)", exec.Boards[0].Total, exec.Total)
+	}
+}
+
+// containerIDs is the test helper rendering a container list's ids.
+func containerIDs(containers []Container) []string {
+	out := make([]string, 0, len(containers))
+	for _, c := range containers {
+		out = append(out, c.ID)
+	}
+	return out
 }
 
 // TestExecutionProjectionSortByCreated: within a state column the work

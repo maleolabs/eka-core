@@ -309,16 +309,15 @@ func containerFor(u *exchange.Unit) *Container {
 	}
 }
 
-// ActiveContainer returns the single active execution container per the
-// exactly-one-active protocol. It returns nil when no container is
-// active (a valid, empty projection state). When the repository is in an
-// invalid state — several containers with container-state "active" — it
-// returns the lexicographically smallest canonical identity and reports
-// the anomaly through multiple.
-func (g *Graph) ActiveContainer() (*Container, bool) {
+// activeContainerUnits returns every active ctr- line's highest
+// instance (the line-level scan shared by the active-container
+// projections), sorted by canonical identity form — the deterministic
+// order both ActiveContainer and ActiveContainers use.
+func (g *Graph) activeContainerUnits() []*exchange.Unit {
 	// Line-level scan: the highest instance of every ctr- line decides
 	// the current container-state (ADR-025) — a completed revision
-	// supersedes an earlier active one.
+	// supersedes an earlier active one. The byForm map already holds
+	// the highest instance per line.
 	var active []*exchange.Unit
 	for _, u := range g.byForm {
 		if u.Identity.Type != "ctr" || u.StateVector.ContainerState != "active" {
@@ -326,17 +325,38 @@ func (g *Graph) ActiveContainer() (*Container, bool) {
 		}
 		active = append(active, u)
 	}
-	if len(active) == 0 {
-		return nil, false
-	}
-	// Deterministic pick: the lexicographically smallest canonical
-	// identity (the byForm iteration order of a map is not
-	// deterministic).
 	sort.Slice(active, func(i, j int) bool {
 		return LineForm(active[i].Identity.Namespace, active[i].Identity.Type, active[i].Identity.ID) <
 			LineForm(active[j].Identity.Namespace, active[j].Identity.Type, active[j].Identity.ID)
 	})
+	return active
+}
+
+// ActiveContainer returns the single active execution container per the
+// one-active-container-per-source_repo protocol (dec:parallel-container-
+// execution). It returns nil when no container is active (a valid,
+// empty projection state). When several containers are active — a valid
+// parallel state — it returns the lexicographically smallest canonical
+// identity and reports the multiplicity through multiple.
+func (g *Graph) ActiveContainer() (*Container, bool) {
+	active := g.activeContainerUnits()
+	if len(active) == 0 {
+		return nil, false
+	}
 	return containerFor(active[0]), len(active) > 1
+}
+
+// ActiveContainers returns every ACTIVE execution container of the
+// project (the highest instance per ctr- line), sorted by canonical
+// identity form — the deterministic order multi-active projections and
+// the containers summary render. Empty when no container is active.
+func (g *Graph) ActiveContainers() []Container {
+	active := g.activeContainerUnits()
+	out := make([]Container, 0, len(active))
+	for _, u := range active {
+		out = append(out, *containerFor(u))
+	}
+	return out
 }
 
 // Containers returns every execution container LINE — the highest
