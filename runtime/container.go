@@ -14,8 +14,12 @@ import (
 // that happens atomically with the container ACTIVATION. A container
 // (ctr-) derives from a plan (plan-) through its depends-on reference;
 // containers are born PLANNED (the draft template's initial
-// container-state; publish persists no lock) and ACTIVATE one at a
-// time (planned -> active, protocol §3 exactly-one-active). Activating
+// container-state; publish persists no lock) and ACTIVATE under the
+// one-active-container-per-source_repo rule (dec:parallel-container-
+// execution): one ACTIVE container per repository, plus a transitive
+// depends-on/derives-from plan-closure disjointness gate across active
+// containers of OTHER repositories (a shared plan/decision node
+// refuses the activation naming the shared line). Activating
 // a container persists the active container unit AND moves the plan's
 // planning-state to immutable (with an appended change-log entry) in
 // ONE store transaction (store.PutUnits) — the active container and
