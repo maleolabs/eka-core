@@ -676,3 +676,146 @@ func TestTransitionContainerActivationTableRefusals(t *testing.T) {
 		t.Errorf("container-state = %q, want planned (refused runs publish nothing)", state)
 	}
 }
+
+// TestTransitionContainerActivationParallelDisjoint: the protocol §3
+// scope-aware gate — an active container in a DIFFERENT source_repo
+// whose plan closure is disjoint does NOT block a second activation:
+// both reach active (one active container per source_repo).
+func TestTransitionContainerActivationParallelDisjoint(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "approved", planLog("approved")), project, "repo")
+	putUnit(t, r, plannedCtr("wave-7", "roadmap-v1"), project, "repo")
+	// An already-active container born in another repo (repo-b) with an
+	// independent plan closure.
+	other := plannedCtr("wave-6", "roadmap-v2")
+	other.StateVector = exchange.StateVector{ContainerState: "active", ExistenceState: "active"}
+	other.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-05", Domain: "container-state", From: "-", To: "active", By: conformance.User("Eng")},
+		{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Eng")},
+	}
+	putUnit(t, r, other, project, "repo-b")
+	putUnit(t, r, planUnit("roadmap-v2", 1, "approved", planLog("approved")), project, "repo-b")
+
+	res, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-7", To: "active", By: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("activation with a disjoint cross-repo active = %v, want success", err)
+	}
+	if res.Target != "test-ns/ctr:wave-7" || res.To != "active" {
+		t.Errorf("result = %+v, want test-ns/ctr:wave-7 -> active", res)
+	}
+	if state, _ := containerState(t, r, "wave-7"); state != "active" {
+		t.Errorf("container-state = %q, want active (parallel activation allowed)", state)
+	}
+}
+
+// TestTransitionContainerActivationParallelSharedClosure: the
+// transitive dependency gate — an active container in a DIFFERENT
+// source_repo whose transitive plan closure shares a node (here the
+// plan of the target, via wave-6's depends-on roadmap-v1) refuses the
+// activation naming the shared plan; nothing publishes.
+func TestTransitionContainerActivationParallelSharedClosure(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "approved", planLog("approved")), project, "repo")
+	putUnit(t, r, plannedCtr("wave-7", "roadmap-v1"), project, "repo")
+	// An active container in repo-b that depends on the SAME plan.
+	other := plannedCtr("wave-6", "roadmap-v1")
+	other.StateVector = exchange.StateVector{ContainerState: "active", ExistenceState: "active"}
+	other.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-05", Domain: "container-state", From: "-", To: "active", By: conformance.User("Eng")},
+		{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Eng")},
+	}
+	putUnit(t, r, other, project, "repo-b")
+
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-7", To: "active", By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("activation with a shared plan closure = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Reason, "shares test-ns/plan:roadmap-v1 with the active container test-ns/ctr:wave-6") {
+		t.Errorf("reason = %q, want the shared-closure refusal naming the shared plan and the active container", refusal.Reason)
+	}
+	if state, _ := containerState(t, r, "wave-7"); state != "planned" {
+		t.Errorf("container-state = %q, want planned (refused runs publish nothing)", state)
+	}
+}
+
+// TestTransitionContainerActivationParallelSharedTransitiveClosure: a
+// shared node two hops away (plan-b depends-on plan-a, wave-6 depends-on
+// plan-b) still refuses — the closure is transitive, not just the
+// direct depends-on plan of the other container.
+func TestTransitionContainerActivationParallelSharedTransitiveClosure(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "approved", planLog("approved")), project, "repo")
+	putUnit(t, r, plannedCtr("wave-7", "roadmap-v1"), project, "repo")
+	// repo-b: wave-6 depends on roadmap-b which derives-from roadmap-v1
+	// (the target's plan) — the shared node is discovered transitively.
+	putUnit(t, r, planUnit("roadmap-b", 1, "approved", planLog("approved")), project, "repo-b")
+	putUnit(t, r, planUnit("roadmap-v1", 1, "approved", planLog("approved")), project, "repo-b")
+	other := plannedCtr("wave-6", "roadmap-b")
+	other.StateVector = exchange.StateVector{ContainerState: "active", ExistenceState: "active"}
+	other.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-05", Domain: "container-state", From: "-", To: "active", By: conformance.User("Eng")},
+		{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Eng")},
+	}
+	putUnit(t, r, other, project, "repo-b")
+
+	// roadmap-b derives-from roadmap-v1 — the transitive edge.
+	rb := planUnit("roadmap-b", 1, "approved", planLog("approved"))
+	rb.Relationships = []exchange.Relationship{{Type: "derives-from", Target: "test-ns/plan:roadmap-v1"}}
+	putUnit(t, r, rb, project, "repo-b")
+
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-7", To: "active", By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("activation with a shared transitive plan closure = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Reason, "shares test-ns/plan:roadmap-v1 with the active container test-ns/ctr:wave-6") {
+		t.Errorf("reason = %q, want the shared-closure refusal naming the shared plan", refusal.Reason)
+	}
+}
+
+// TestTransitionContainerActivationParallelCycleSafe: a cyclic plan
+// closure (plan-a depends-on plan-b, plan-b depends-on plan-a) does not
+// loop the closure walk — activation proceeds when the closures are
+// otherwise disjoint.
+func TestTransitionContainerActivationParallelCycleSafe(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-cyc-a", 1, "approved", planLog("approved")), project, "repo")
+	putUnit(t, r, plannedCtr("wave-7", "roadmap-cyc-a"), project, "repo")
+
+	// Cycle between roadmap-cyc-a and roadmap-cyc-b in repo-b, with an
+	// active container on roadmap-cyc-b.
+	pa := planUnit("roadmap-cyc-a", 1, "approved", planLog("approved"))
+	pa.Relationships = []exchange.Relationship{{Type: "depends-on", Target: "test-ns/plan:roadmap-cyc-b"}}
+	putUnit(t, r, pa, project, "repo-b")
+	pb := planUnit("roadmap-cyc-b", 1, "approved", planLog("approved"))
+	pb.Relationships = []exchange.Relationship{{Type: "depends-on", Target: "test-ns/plan:roadmap-cyc-a"}}
+	putUnit(t, r, pb, project, "repo-b")
+	other := plannedCtr("wave-6", "roadmap-cyc-b")
+	other.StateVector = exchange.StateVector{ContainerState: "active", ExistenceState: "active"}
+	other.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-05", Domain: "container-state", From: "-", To: "active", By: conformance.User("Eng")},
+		{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Eng")},
+	}
+	putUnit(t, r, other, project, "repo-b")
+
+	// The cycle intersects the target's closure (roadmap-cyc-a is in
+	// both), so the activation must REFUSE — but the walk must not hang.
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-7", To: "active", By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("activation with a cyclic shared closure = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Reason, "shares test-ns/plan:roadmap-cyc-a") {
+		t.Errorf("reason = %q, want the shared-closure refusal naming the cyclic shared plan", refusal.Reason)
+	}
+}
+

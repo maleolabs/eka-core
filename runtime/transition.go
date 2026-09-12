@@ -601,26 +601,78 @@ func transitionContainerState(st *store.Store, project, sourceRepo string, ref c
 	// plan-approval gate; the plan lock lands atomically with the
 	// activation (store.PutUnits on the lockPlanPuts batch).
 	if from == "planned" {
-		// Gate (protocol §3): exactly one container may be active at a
-		// time — a planned container activates only when no OTHER
-		// container line is active. The smallest canonical form of the
-		// active offender is named (deterministic). A store read
-		// failure refuses closed: an activation whose project cannot be
+		// Gate (protocol §3): one active container per source_repo —
+		// a planned container activates only when no OTHER container
+		// line of the SAME source_repo is active, and every active
+		// container of a DIFFERENT source_repo has a disjoint
+		// transitive plan closure (depends-on/derives-from closure
+		// over plan lines). The smallest canonical form of an active
+		// offender is named (deterministic). A store read failure
+		// refuses closed: an activation whose project cannot be
 		// scanned never proceeds.
-		other, ok := otherActiveContainer(st, project, ref)
+		others, ok := otherActiveContainers(st, project, ref)
 		if !ok {
 			return nil, &TransitionRefusal{
-				Reason: "cannot read the project's containers: the exactly-one-active gate (protocol §3) could not be evaluated",
+				Reason: "cannot read the project's containers: the active-container gate (protocol §3) could not be evaluated",
 				Hint:   "run 'eka sync' first and retry the activation",
 			}
 		}
-		if other != "" {
-			return nil, &TransitionRefusal{
-				Reason: fmt.Sprintf("another container %s is active; activate %s only after it completes",
-					other, ref.Namespace+"/"+ref.Type+":"+ref.ID),
-				Hint: "eka transition ctr:" + containerBareID(other) + " completed",
+		var sameRepo, crossRepo []activeContainer
+		for _, ac := range others {
+			if ac.SourceRepo == sourceRepo {
+				sameRepo = append(sameRepo, ac)
+			} else {
+				crossRepo = append(crossRepo, ac)
 			}
 		}
+		sort.Slice(sameRepo, func(i, j int) bool { return sameRepo[i].Line < sameRepo[j].Line })
+		if len(sameRepo) > 0 {
+			return nil, &TransitionRefusal{
+				Reason: fmt.Sprintf("another container %s is active; activate %s only after it completes",
+					sameRepo[0].Line, ref.Namespace+"/"+ref.Type+":"+ref.ID),
+				Hint: "eka transition ctr:" + containerBareID(sameRepo[0].Line) + " completed",
+			}
+		}
+		if len(crossRepo) > 0 {
+			// Cross-repo activation is legal only when the transitive
+			// plan closure of the target container does not intersect
+			// the transitive plan closure of any OTHER active
+			// container (depends-on/derives-from closure over plan
+			// lines). A shared node refuses, naming the offending
+			// plan and the container it blocks.
+			targetClosure, err := planClosure(st, project, current)
+			if err != nil {
+				return nil, &TransitionRefusal{
+					Reason: fmt.Sprintf("cannot read the plan closure of %s: %v", ref.Namespace+"/"+ref.Type+":"+ref.ID, err),
+					Hint:   "run 'eka sync' first and retry the activation",
+				}
+			}
+			for _, ac := range crossRepo {
+				otherClosure, err := planClosure(st, project, ac.Unit)
+				if err != nil {
+					return nil, &TransitionRefusal{
+						Reason: fmt.Sprintf("cannot read the plan closure of %s: %v", ac.Line, err),
+						Hint:   "run 'eka sync' first and retry the activation",
+					}
+				}
+				var shared []string
+				for line := range targetClosure {
+					if otherClosure[line] {
+						shared = append(shared, line)
+					}
+				}
+				if len(shared) > 0 {
+					sort.Strings(shared)
+					return nil, &TransitionRefusal{
+						Reason: fmt.Sprintf("cannot activate %s: the transitive plan closure shares %s with the active container %s",
+							ref.Namespace+"/"+ref.Type+":"+ref.ID, shared[0], ac.Line),
+						Hint: fmt.Sprintf("disjoint the plan closures of %s and %s, or wait for %s to complete",
+							ref.Namespace+"/"+ref.Type+":"+ref.ID, ac.Line, containerBareID(ac.Line)),
+					}
+				}
+			}
+		}
+
 
 		today := time.Now().Format("2006-01-02")
 		next := *current // shallow copy; the mutable slices below are rebuilt.
@@ -815,41 +867,119 @@ func hasSuperseder(st *store.Store, project string, target conformance.Reference
 	return false
 }
 
-// otherActiveContainer returns the canonical line form of the smallest
-// OTHER active container line of the project (highest instance per
-// line — the byLine pattern of containerWorkItems; the target's own
-// line never counts against itself), or "" when no other container is
-// active. ok=false when the store cannot be read — the conservative
-// answer: the exactly-one-active gate fails closed on unreadable
-// projects.
-func otherActiveContainer(st *store.Store, project string, target conformance.Reference) (other string, ok bool) {
-	units, err := st.UnitsByProject(project)
+// activeContainer is one ACTIVE container of the project with its
+// provenance source_repo, evaluated by the one-active-container-per-
+// source_repo gate.
+type activeContainer struct {
+	Line       string
+	SourceRepo string
+	Unit       *exchange.Unit
+}
+
+// otherActiveContainers returns every ACTIVE container line of the
+// project except the target's own (highest instance per line — the
+// byLine pattern of containerWorkItems), each attributed to the
+// source_repo of its current instance, sorted by line form. ok=false
+// when the store cannot be read — the conservative answer: the
+// active-container gate fails closed on unreadable projects.
+func otherActiveContainers(st *store.Store, project string, target conformance.Reference) ([]activeContainer, bool) {
+	refs, err := st.RefsByProject(project)
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 	byLine := map[string]*exchange.Unit{}
-	for _, u := range units {
-		if u.Identity.Type != "ctr" {
+	repoByLine := map[string]string{}
+	for _, r := range refs {
+		if r.Type != "ctr" {
 			continue
 		}
-		key := u.Identity.Namespace + "/" + u.Identity.Type + ":" + u.Identity.ID
-		if cur, exists := byLine[key]; !exists || u.Identity.InstanceVersion > cur.Identity.InstanceVersion {
+		u, found, err := st.Unit(r.Form)
+		if err != nil {
+			return nil, false
+		}
+		if !found {
+			return nil, false
+		}
+		key := r.Namespace + "/" + r.Type + ":" + r.ID
+		cur := byLine[key]
+		if cur == nil ||
+			u.Identity.InstanceVersion > cur.Identity.InstanceVersion ||
+			(u.Identity.InstanceVersion == cur.Identity.InstanceVersion && r.SourceRepo < repoByLine[key]) {
 			byLine[key] = u
+			repoByLine[key] = r.SourceRepo
 		}
 	}
 	targetLine := target.Namespace + "/" + target.Type + ":" + target.ID
-	var active []string
+	var out []activeContainer
 	for line, u := range byLine {
 		if line != targetLine && u.StateVector.ContainerState == "active" {
-			active = append(active, line)
+			out = append(out, activeContainer{Line: line, SourceRepo: repoByLine[line], Unit: u})
 		}
 	}
-	if len(active) == 0 {
-		return "", true
-	}
-	sort.Strings(active)
-	return active[0], true
+	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out, true
 }
+
+// planClosure computes the transitive depends-on/derives-from closure
+// of the relationship targets reachable from the container's
+// depends-on plan line, over the published units of the project
+// (highest instance per line, the resolver default). The plan line
+// itself is in the closure. The walk is cycle-safe (the visited set
+// short-circuits) and follows every depends-on/derives-from target —
+// plans, decisions, requirements: any shared node between two active
+// containers is a dependency intersection and refuses the activation.
+// Missing lines are tolerated: the closure still records the
+// unresolved reference (the store is the publisher's declared
+// dependency space whether or not the dependency has been pushed yet;
+// unknown lines never block another container because no other
+// container can share them transitively).
+func planClosure(st *store.Store, project string, ctr *exchange.Unit) (map[string]bool, error) {
+	ref, err := resolveDependsOnPlan(ctr)
+	if err != nil {
+		return nil, err
+	}
+	closure := map[string]bool{}
+	queue := []string{ref.Namespace + "/plan:" + ref.ID}
+	for len(queue) > 0 {
+		line := queue[0]
+		queue = queue[1:]
+		if closure[line] {
+			continue
+		}
+		closure[line] = true
+		lineUnits, err := st.UnitsByLine(identityNamespace(line), identityType(line), identityID(line))
+		if err != nil {
+			return nil, err
+		}
+		var latest *exchange.Unit
+		for _, u := range lineUnits {
+			if latest == nil || u.Identity.InstanceVersion > latest.Identity.InstanceVersion {
+				latest = u
+			}
+		}
+		if latest == nil {
+			continue
+		}
+		for _, rel := range latest.Relationships {
+			if rel.Type != "depends-on" && rel.Type != "derives-from" {
+				continue
+			}
+			tref, perr := conformance.ParseReference(rel.Target, latest.Identity.Namespace, latest.Identity.Type)
+			if perr != nil {
+				continue
+			}
+			line := tref.Namespace + "/" + tref.Type + ":" + tref.ID
+			if !closure[line] {
+				queue = append(queue, line)
+			}
+		}
+	}
+	return closure, nil
+}
+
+func identityNamespace(line string) string { return strings.SplitN(line, "/", 2)[0] }
+func identityType(line string) string      { rest := line[strings.IndexByte(line, '/')+1:]; return rest[:strings.IndexByte(rest, ':')] }
+func identityID(line string) string        { return line[strings.LastIndexByte(line, ':')+1:] }
 
 // containerBareID extracts the bare id of a canonical line form
 // ("<ns>/ctr:<id>" -> "<id>") for the deterministic completion hint.
