@@ -43,6 +43,7 @@ eka-core is a library: consumers import its packages directly (the CLI,
 | [`view`](view) | The projection engine: the closed set of named views (five Engineering Domains, `ticket`, `board`, `document`, `containers`) over the Knowledge Graph. |
 | [`machine`](machine) | The machine interface: deterministic canonical JSON (`eka-cko-v2`) of CKOs and collections, for `eka get`, MCP, and other machine consumers. |
 | [`contexts`](contexts) | The Context Engine: deterministic construction of the Context Object around one knowledge subject at three depths (`local`, `dependency`, `engineering`). |
+| [`codegraph`](codegraph) | The code graph: bounded deterministic source inventory (`Build`), natural-language discovery (`Discover`), bounded context (`Serve`), and exact retrieval (`Get`) over the pure codebase only — transport/derived dirs (`exchange/`, `.eka/`, `drafts/`, `feedback/`) are skipped at every level. |
 | [`plugin`](plugin) | The EKA plugin contract (v1): the shared types (`Manifest`, `Artifact`, `InstallOptions`, `InstallResult`, `ContractVersion`) and the official plugin registry (`Repo`, `Registry`, `OfficialRegistry`) that the CLI and plugins such as `eka-mcp` both import. |
 
 ## API guide
@@ -151,7 +152,7 @@ dir := metadata.Find(path)            // nearest eka.yaml walk-up
 `Metadata` holds `Version`, `Project`, `Name`, `Namespace`; `Parse` is strict
 (unknown/duplicate keys refused, `version` must be 1, identifiers validated).
 
-### compile, sync, view, contexts
+### compile, sync, view, contexts, codegraph
 
 - `compile.Compile(root)` returns `*compile.Result` (`Package`, `CKOs`,
   `Validation`); a failing gate is a `*compile.ValidationError`.
@@ -161,6 +162,11 @@ dir := metadata.Find(path)            // nearest eka.yaml walk-up
   also exposes `Projections()`, `Aliases()`, and `HelpList()`.
 - `contexts.New(rt)` wires the Context Engine; `engine.Build(subject,
   projectID, depth, opts)` constructs the Context Object.
+- `codegraph.Build(root)` indexes the pure codebase only: `exchange/`,
+  `.eka/`, `drafts/`, `feedback/` (plus `.git/`, `vendor/`, `node_modules/`)
+  are skipped at every level by directory name. `Discover` / `Serve` / `Get`
+  therefore never return knowledge snapshots — read those via
+  `eka get` / `context` / `view`.
 
 ### plugin — the plugin contract and official registry
 

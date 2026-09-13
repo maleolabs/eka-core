@@ -1,4 +1,9 @@
 // Package codegraph provides bounded, deterministic source inventory and context queries.
+//
+// The index reflects the pure codebase only: transport/derived directories
+// (exchange, .eka, drafts, feedback — plus .git, vendor, node_modules) are
+// skipped at every level by directory name. Knowledge snapshots remain
+// accessible via eka get/context/view, never via code_discover/context/get.
 package codegraph
 
 import (
@@ -61,13 +66,37 @@ type BuildOptions struct {
 // DefaultBuildOptions returns the default options (follow symlinks safely).
 func DefaultBuildOptions() BuildOptions { return BuildOptions{FollowSymlinks: true} }
 
+// skippedTransportDirs are transport/derived directory names skipped at every
+// walk level so the index reflects the pure codebase (ADR-034: code index is
+// a derived cache, never CKO/exchange content). Knowledge snapshots stay
+// reachable via eka get/context/view.
+var skippedTransportDirs = map[string]bool{
+	"exchange": true,
+	".eka":     true,
+	"drafts":   true,
+	"feedback": true,
+}
+
+// isSkippedDir reports whether a directory name is always skipped from the
+// index: version-control/dependency dirs plus transport/derived dirs.
+func isSkippedDir(name string) bool {
+	switch name {
+	case ".git", "vendor", "node_modules":
+		return true
+	}
+	return skippedTransportDirs[name]
+}
+
 // Build scans root. Unsupported files remain inventory entries without parsed symbols.
 // Symlinked directories are followed safely with cycle detection.
+// Transport/derived directories (exchange, .eka, drafts, feedback) are skipped
+// at every level; use eka get/context/view for knowledge snapshots.
 func Build(root string) (Index, error) {
 	return BuildWithOptions(root, DefaultBuildOptions())
 }
 
-// BuildWithOptions scans root with explicit options.
+// BuildWithOptions scans root with explicit options. The pure-codebase
+// skip-list (isSkippedDir) applies identically in every option path.
 func BuildWithOptions(root string, opts BuildOptions) (Index, error) {
 	return buildWithOptions(root, "", opts)
 }
@@ -136,7 +165,7 @@ func walkDir(abs, logicalDir, physicalDir, skip string, opts BuildOptions, visit
 			return err
 		}
 		if info.IsDir() {
-			if name == ".git" || name == "vendor" || name == "node_modules" {
+			if isSkippedDir(name) {
 				continue
 			}
 			real, err := filepath.EvalSymlinks(logical)
