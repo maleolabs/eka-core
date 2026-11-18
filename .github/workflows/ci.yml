@@ -37,5 +37,5 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test -race -count=1 ./...
+      - name: Test and coverage gate
+        run: ./scripts/coverage-gate.sh
