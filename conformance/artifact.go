@@ -54,6 +54,14 @@ type Artifact struct {
 	AuthorKind string
 	Created    string
 	Updated    string
+	// ValidUntil is the declared validity horizon (freshness ADR):
+	// YYYY-MM-DD, "" when undeclared. LastConfirmed is the date a human
+	// last asserted the content still holds — author-set, never written
+	// by tooling, and NOT `updated` (which is the file modification
+	// time). Both are advisory: the shape is structural, the value is
+	// never compared against a clock by any rule.
+	ValidUntil    string
+	LastConfirmed string
 
 	// States maps present state domain fields to their values. A domain
 	// absent from this map is not present on the artifact.
@@ -260,6 +268,8 @@ var allowedJSONTopLevel = map[string]bool{
 	"confidence":          true,
 	"sourceCommitSha":     true,
 	"captureMeta":         true,
+	"validUntil":          true,
+	"lastConfirmed":       true,
 }
 
 // analyzeJSON is the v2.0 JSON-native authoring adapter
@@ -341,7 +351,8 @@ func analyzeJSON(relPath, absPath string, data []byte, requireInstanceVersion bo
 	// kebab internal names (the engine is v1.1-shaped; JSON is the
 	// authoring spelling).
 	fm := make(map[string]any, len(root))
-	for _, k := range []string{"namespace", "type", "id", "revision", "author", "created", "updated", "phase", "dimension", "domain"} {
+	for _, k := range []string{"namespace", "type", "id", "revision", "author", "created", "updated", "phase", "dimension", "domain",
+		"validUntil", "lastConfirmed"} {
 		if v, ok := root[k]; ok {
 			fm[k] = v
 		}
@@ -727,9 +738,20 @@ func classifyMap(relPath, absPath string, fm map[string]any, requireInstanceVers
 		}
 	}
 
-	for _, f := range []struct{ key, label string }{
-		{"created", "`created`"},
-		{"updated", "`updated`"},
+	for _, f := range []struct {
+		key   string
+		label string
+		dst   *string
+	}{
+		{"created", "`created`", &a.Created},
+		{"updated", "`updated`", &a.Updated},
+		// Freshness (validity horizon ADR): envelope metadata with the
+		// same structural contract as the other dates — a malformed
+		// value is R0, so a typo never degrades silently into
+		// "undeclared". The values themselves are never checked
+		// against a clock here.
+		{"validUntil", "`validUntil`", &a.ValidUntil},
+		{"lastConfirmed", "`lastConfirmed`", &a.LastConfirmed},
 	} {
 		if v, ok := fm[f.key]; ok {
 			s, ok := asDateString(v)
@@ -738,10 +760,8 @@ func classifyMap(relPath, absPath string, fm map[string]any, requireInstanceVers
 					File: relPath, Rule: RuleStructural, Severity: SeverityError,
 					Message: fmt.Sprintf("%s must be a date in YYYY-MM-DD format", f.label),
 				})
-			} else if f.key == "created" {
-				a.Created = s
 			} else {
-				a.Updated = s
+				*f.dst = s
 			}
 		}
 	}

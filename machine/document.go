@@ -49,15 +49,23 @@ type Document struct {
 	Phase          string                      `json:"phase,omitempty"`
 	Classification *Classification             `json:"classification,omitempty"`
 	// Provenance capture fields (ADR-035 v3, additive; omitempty keeps old payloads valid).
-	Provenance       string           `json:"provenance,omitempty"`
-	Confidence       *float64         `json:"confidence,omitempty"`
-	SourcePromptHash string           `json:"sourcePromptHash,omitempty"`
-	SourceCommitSha  string           `json:"sourceCommitSha,omitempty"`
-	CaptureMeta      *CaptureMeta     `json:"captureMeta,omitempty"`
-	Relationships    []Relationship   `json:"relationships,omitempty"`
-	ChangeLog        []ChangeLogEntry `json:"changeLog,omitempty"`
-	Content          *Content         `json:"content,omitempty"`
-	ObjectHash       string           `json:"objectHash"`
+	Provenance       string       `json:"provenance,omitempty"`
+	Confidence       *float64     `json:"confidence,omitempty"`
+	SourcePromptHash string       `json:"sourcePromptHash,omitempty"`
+	SourceCommitSha  string       `json:"sourceCommitSha,omitempty"`
+	CaptureMeta      *CaptureMeta `json:"captureMeta,omitempty"`
+	// Freshness (validity horizon ADR): the declared validity horizon
+	// and the last human confirmation, absolute YYYY-MM-DD dates
+	// (omitempty — a document without them is byte-identical to the
+	// pre-freshness schema). Advisory only: the values are never
+	// compared against a clock here; the clock-dependent view is the
+	// retrieval-option Freshness block below.
+	ValidUntil    string           `json:"validUntil,omitempty"`
+	LastConfirmed string           `json:"lastConfirmed,omitempty"`
+	Relationships []Relationship   `json:"relationships,omitempty"`
+	ChangeLog     []ChangeLogEntry `json:"changeLog,omitempty"`
+	Content       *Content         `json:"content,omitempty"`
+	ObjectHash    string           `json:"objectHash"`
 	// Retrieval options (ADR-015 additive contract): appended at the
 	// END of the schema — absent until a retrieval flag asks for them,
 	// so the default document is byte-identical to the pre-option
@@ -65,6 +73,24 @@ type Document struct {
 	Upstream   []*Document     `json:"upstream,omitempty"`
 	Downstream []*Document     `json:"downstream,omitempty"`
 	Timeline   []TimelineEntry `json:"timeline,omitempty"`
+	// Freshness is the clock-dependent freshness view (--freshness): the
+	// declared horizon, the last confirmation and the derived status.
+	// Appended here for the same additive reason as the traversals —
+	// NewDocument never sets it.
+	Freshness *Freshness `json:"freshness,omitempty"`
+}
+
+// Freshness is the freshness verdict of one knowledge object as of an
+// injected clock: the declared validity horizon and last confirmation
+// ("" when undeclared), the whole days from now to the horizon
+// (negative once past), and the status — "stale" (past the horizon),
+// "current" (inside it) or "undeclared" (no horizon declared, the
+// honest third state: never a default, never a penalty).
+type Freshness struct {
+	ValidUntil      string `json:"validUntil,omitempty"`
+	LastConfirmed   string `json:"lastConfirmed,omitempty"`
+	DaysUntilExpiry int    `json:"daysUntilExpiry"`
+	Status          string `json:"status"`
 }
 
 // Identity is the complete identity tuple of the CKO, in the fixed
@@ -170,6 +196,10 @@ type Content struct {
 //     not valid JSON degrades deterministically to the text shape);
 //   - object_hash is the CKO digest ("" for hand-built units, kept
 //     as-is).
+//
+// Freshness is never set here: it is a retrieval option derived from
+// an injected clock, so the default document carries no freshness
+// block.
 func NewDocument(u *exchange.Unit) (*Document, error) {
 	if u == nil {
 		return nil, fmt.Errorf("machine: cannot build a document from a nil unit")
@@ -211,6 +241,8 @@ func NewDocument(u *exchange.Unit) (*Document, error) {
 		Provenance:       u.Provenance,
 		SourcePromptHash: u.SourcePromptHash,
 		SourceCommitSha:  u.SourceCommitSha,
+		ValidUntil:       u.ValidUntil,
+		LastConfirmed:    u.LastConfirmed,
 		// The content pointer: NewDocument always sets it, so the
 		// default document carries content exactly as before — the
 		// pointer (plus omitempty) exists so retrieval options can

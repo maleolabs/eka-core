@@ -261,6 +261,14 @@ type Unit struct {
 	Confidence       float64     `json:"confidence,omitempty"`
 	SourceCommitSha  string      `json:"sourceCommitSha,omitempty"`
 	CaptureMeta      CaptureMeta `json:"captureMeta,omitempty"`
+	// Freshness (validity horizon ADR): the declared validity horizon
+	// and the last human confirmation, both absolute YYYY-MM-DD dates,
+	// "" when undeclared. Additive envelope metadata: omitempty keeps
+	// every unit without them byte-identical, so stored payloads stay
+	// valid without a migration. lastConfirmed is not `updated` (the
+	// file modification time).
+	ValidUntil    string `json:"validUntil,omitempty"`
+	LastConfirmed string `json:"lastConfirmed,omitempty"`
 	// Content references the representation-tagged payload (RSF §6).
 	Content ContentRef `json:"content"`
 

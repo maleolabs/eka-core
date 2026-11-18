@@ -358,6 +358,8 @@ func toUnit(la *loadedArtifact) *Unit {
 		Author:                conformance.AuthorIdentity{Kind: la.AuthorKind, Name: la.Author},
 		Created:               la.Created,
 		Updated:               la.Updated,
+		ValidUntil:            la.ValidUntil,
+		LastConfirmed:         la.LastConfirmed,
 		StateVector:           stateVectorFrom(la.States),
 		Classification:        classification,
 		Phase:                 la.Phase,

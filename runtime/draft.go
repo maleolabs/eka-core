@@ -566,7 +566,11 @@ type draftDoc struct {
 	Confidence       *float64            `json:"confidence,omitempty"`
 	SourceCommitSha  string              `json:"sourceCommitSha,omitempty"`
 	CaptureMeta      *CaptureMeta        `json:"captureMeta,omitempty"`
-	Content          map[string]any      `json:"content"`
+	// ValidUntil is scaffolded visible and EMPTY: an empty value is the
+	// undeclared state, not a default horizon (a default would be a
+	// claim the model cannot make).
+	ValidUntil string         `json:"validUntil,omitempty"`
+	Content    map[string]any `json:"content"`
 }
 
 // draftChangeLog is one change-log entry in the §3.2 spelling: domain
@@ -691,6 +695,10 @@ func draftJSON(req NewDraftRequest, extraContent map[string]any) ([]byte, error)
 			DedupeKey:  req.CaptureMeta.DedupeKey,
 		}
 	}
+	// Freshness (validity horizon ADR): the key is always scaffolded so
+	// the horizon is visible at authoring time, and always left empty —
+	// empty is undeclared, and a default horizon would be a guess.
+	doc.ValidUntil = ""
 	// Content: required section keys as empty placeholders; the tkt-
 	// template's commands value carries the exact projection header
 	// line (rule 8).
@@ -991,6 +999,8 @@ func unitFromDraft(a *conformance.Artifact, version int) *exchange.Unit {
 		Provenance:       a.Provenance,
 		SourcePromptHash: a.SourcePromptHash,
 		SourceCommitSha:  a.SourceCommitSha,
+		ValidUntil:       a.ValidUntil,
+		LastConfirmed:    a.LastConfirmed,
 		CaptureMeta: exchange.CaptureMeta{
 			Classifier: a.CaptureMeta.Classifier,
 			DedupeKey:  a.CaptureMeta.DedupeKey,
@@ -1153,12 +1163,16 @@ type inlineCKO struct {
 		ID              string `yaml:"id"`
 		InstanceVersion *int   `yaml:"instanceVersion"` // nil = auto-assign
 	} `yaml:"identity"`
-	Revision       int                        `yaml:"revision"`
-	Author         conformance.AuthorIdentity `yaml:"author"`
-	Created        string                     `yaml:"created"`
-	Updated        string                     `yaml:"updated"`
-	State          map[string]string          `yaml:"state"`
-	Phase          string                     `yaml:"phase"`
+	Revision int                        `yaml:"revision"`
+	Author   conformance.AuthorIdentity `yaml:"author"`
+	Created  string                     `yaml:"created"`
+	Updated  string                     `yaml:"updated"`
+	// Freshness (validity horizon ADR): the declared horizon and the
+	// last confirmation, absolute YYYY-MM-DD dates ("" = undeclared).
+	ValidUntil     string            `yaml:"validUntil"`
+	LastConfirmed  string            `yaml:"lastConfirmed"`
+	State          map[string]string `yaml:"state"`
+	Phase          string            `yaml:"phase"`
 	Classification struct {
 		Dimension           string   `yaml:"dimension"`
 		DimensionsSecondary []string `yaml:"dimensionsSecondary"`
@@ -1238,6 +1252,10 @@ func (AuthoringService) PublishInline(rt *Runtime, input []byte, opts PublishOpt
 		Author:   doc.Author,
 		Created:  doc.Created,
 		Updated:  doc.Updated,
+		// The freshness horizon is author-set state, not a default;
+		// an absent input leaves it undeclared.
+		ValidUntil:    doc.ValidUntil,
+		LastConfirmed: doc.LastConfirmed,
 		StateVector: exchange.StateVector{
 			ContentState:   doc.State["contentState"],
 			ExecutionState: doc.State["executionState"],
