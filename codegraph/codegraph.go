@@ -358,12 +358,14 @@ func Load(path string) (Index, error) {
 	return i, nil
 }
 
-// LoadOrBuild returns cached index only when root and current inventory digest match.
+// LoadOrBuild returns the cached index only when its recorded metadata
+// fingerprint still matches the tree, so a hit reads and parses nothing.
 func LoadOrBuild(root, cachePath string) (Index, bool, error) {
 	return LoadOrBuildWithOptions(root, cachePath, DefaultBuildOptions())
 }
 
-// LoadOrBuildWithOptions is LoadOrBuild with explicit build options.
+// LoadOrBuildWithOptions is LoadOrBuild with explicit build options. A cache
+// written before StatKey existed is never a hit and is upgraded in place.
 //
 // A cache is trusted on metadata alone: the recorded StatKey is compared
 // against one directory walk, so a hit reads and parses nothing. A cache
