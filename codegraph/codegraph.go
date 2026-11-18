@@ -14,6 +14,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"hash"
 	"os"
 	"path/filepath"
 	"sort"
@@ -47,7 +48,13 @@ type Ref struct {
 	Name string `json:"name"`
 }
 type Index struct {
-	Root    string   `json:"root"`
+	Root string `json:"root"`
+	// StatKey is the metadata fingerprint (path, size, mtime) of exactly the
+	// files this index inventories. It is what makes a cache cheap to trust:
+	// comparing it costs one directory walk and no file reads, so a hit
+	// parses nothing. Empty means the cache predates the fingerprint and
+	// cannot be trusted as a hit — it is rebuilt and rewritten.
+	StatKey string   `json:"statKey,omitempty"`
 	Digest  string   `json:"digest"`
 	Files   []File   `json:"files"`
 	Symbols []Symbol `json:"symbols"`
@@ -65,6 +72,13 @@ type BuildOptions struct {
 
 // DefaultBuildOptions returns the default options (follow symlinks safely).
 func DefaultBuildOptions() BuildOptions { return BuildOptions{FollowSymlinks: true} }
+
+// parseCount counts the files a build opened. It exists so a test can prove a
+// cache hit does no build work: before the stat fingerprint, deciding whether
+// the cache was fresh meant running the entire build anyway — os.ReadFile and
+// sha256 over every file, plus parseGo for Go files — so the cache saved only
+// the final write and nothing else.
+var parseCount int
 
 // skippedTransportDirs are transport/derived directory names skipped at every
 // walk level so the index reflects the pure codebase (ADR-034: code index is
@@ -114,21 +128,94 @@ func buildWithOptions(root, skip string, opts BuildOptions) (Index, error) {
 	}
 	idx := Index{Root: abs}
 	visited := map[string]bool{realRoot: true}
-	if err := walkDir(abs, abs, realRoot, skip, opts, visited, &idx); err != nil {
+	// The fingerprint is accumulated during the same traversal that builds
+	// the index, so the two can never describe different file sets: a cache
+	// hit must never be granted for a tree that would build differently.
+	stat := newStatHasher()
+	err = walkEntries(abs, abs, realRoot, skip, opts, visited, func(rel, logical string, info os.FileInfo) error {
+		stat.add(rel, info)
+		return indexFile(logical, rel, &idx)
+	})
+	if err != nil {
 		return Index{}, err
 	}
 	sort.Slice(idx.Files, func(i, j int) bool { return idx.Files[i].Path < idx.Files[j].Path })
 	sort.Slice(idx.Symbols, func(i, j int) bool { return symbolKey(idx.Symbols[i]) < symbolKey(idx.Symbols[j]) })
 	sort.Slice(idx.Refs, func(i, j int) bool { return refKey(idx.Refs[i]) < refKey(idx.Refs[j]) })
 	idx.Digest = digest(idx.Files)
+	idx.StatKey = stat.sum()
 	return idx, nil
 }
 
-// walkDir inventories logicalDir (slash-relative index paths derive from it)
-// by reading physicalDir. visited holds resolved real directory paths already
-// traversed; a directory whose real path is in visited is skipped, which
-// terminates symlink loops deterministically.
-func walkDir(abs, logicalDir, physicalDir, skip string, opts BuildOptions, visited map[string]bool, idx *Index) error {
+// indexFile reads one inventoried file and adds it, with its parsed symbols
+// when it is Go, to idx.
+func indexFile(logical, rel string, idx *Index) error {
+	parseCount++
+	b, err := os.ReadFile(logical)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(b)
+	f := File{Path: rel, Language: language(logical), Digest: hex.EncodeToString(sum[:]), Size: int64(len(b))}
+	if f.Language == "go" {
+		parseGo(logical, f.Path, b, &f, idx)
+	}
+	idx.Files = append(idx.Files, f)
+	return nil
+}
+
+// statHasher accumulates the metadata fingerprint of the inventoried set.
+// Entries are hashed in traversal order, which walkEntries sorts, so the
+// result is deterministic for a given tree.
+type statHasher struct{ h hash.Hash }
+
+func newStatHasher() *statHasher { return &statHasher{h: sha256.New()} }
+
+// add records one file's identity. Size and mtime are the cheap signals a
+// content change must move; mtime uses UnixNano so its representation cannot
+// vary by locale or by the wall clock's monotonic component.
+func (s *statHasher) add(rel string, info os.FileInfo) {
+	fmt.Fprintf(s.h, "%s\x00%d\x00%d\n", rel, info.Size(), info.ModTime().UnixNano())
+}
+
+func (s *statHasher) sum() string { return hex.EncodeToString(s.h.Sum(nil)) }
+
+// currentStatKey computes the metadata fingerprint of the tree as it is now,
+// reading no file contents. It is the whole reason a cache hit is cheap, and
+// it walks through the same walkEntries the build uses so the two traversals
+// are the same code rather than two that must be kept in step by hand.
+func currentStatKey(root, skip string, opts BuildOptions) (string, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	realRoot, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		realRoot = abs
+	}
+	visited := map[string]bool{realRoot: true}
+	stat := newStatHasher()
+	err = walkEntries(abs, abs, realRoot, skip, opts, visited, func(rel, _ string, info os.FileInfo) error {
+		stat.add(rel, info)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return stat.sum(), nil
+}
+
+// walkEntries inventories logicalDir by reading physicalDir, calling onFile for
+// every file it would index. visited holds resolved real directory paths
+// already traversed; a directory whose real path is in visited is skipped,
+// which terminates symlink loops deterministically.
+//
+// Every consumer of the inventory — the build and the stat fingerprint — goes
+// through this one traversal. A second hand-maintained walker would be free to
+// disagree about skip rules or symlinks, and a cache hit decided by a walker
+// that disagrees with the builder is worse than a slow cache: it would serve a
+// stale index for a tree that has actually changed.
+func walkEntries(abs, logicalDir, physicalDir, skip string, opts BuildOptions, visited map[string]bool, onFile func(rel, logical string, info os.FileInfo) error) error {
 	entries, err := os.ReadDir(physicalDir)
 	if err != nil {
 		return err
@@ -179,21 +266,14 @@ func walkDir(abs, logicalDir, physicalDir, skip string, opts BuildOptions, visit
 				continue
 			}
 			visited[real] = true
-			if err := walkDir(abs, logical, real, skip, opts, visited, idx); err != nil {
+			if err := walkEntries(abs, logical, real, skip, opts, visited, onFile); err != nil {
 				return err
 			}
 			continue
 		}
-		b, err := os.ReadFile(logical)
-		if err != nil {
+		if err := onFile(filepath.ToSlash(rel), logical, info); err != nil {
 			return err
 		}
-		sum := sha256.Sum256(b)
-		f := File{Path: filepath.ToSlash(rel), Language: language(logical), Digest: hex.EncodeToString(sum[:]), Size: int64(len(b))}
-		if f.Language == "go" {
-			parseGo(logical, f.Path, b, &f, idx)
-		}
-		idx.Files = append(idx.Files, f)
 	}
 	return nil
 }
@@ -284,19 +364,24 @@ func LoadOrBuild(root, cachePath string) (Index, bool, error) {
 }
 
 // LoadOrBuildWithOptions is LoadOrBuild with explicit build options.
+//
+// A cache is trusted on metadata alone: the recorded StatKey is compared
+// against one directory walk, so a hit reads and parses nothing. A cache
+// written before StatKey existed has none, and is therefore never a hit — it
+// is rebuilt once and rewritten with the fingerprint, which costs one build for
+// every old cache and then never again.
 func LoadOrBuildWithOptions(root, cachePath string, opts BuildOptions) (Index, bool, error) {
 	skip, _ := filepath.Abs(cachePath)
-	i, e := Load(cachePath)
-	if e == nil {
-		fresh, e2 := buildWithOptions(root, skip, opts)
-		if e2 != nil {
-			return Index{}, false, e2
-		}
-		if i.Root == fresh.Root && i.Digest == fresh.Digest {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return Index{}, false, err
+	}
+	if i, e := Load(cachePath); e == nil && i.StatKey != "" && i.Root == abs {
+		if key, e2 := currentStatKey(abs, skip, opts); e2 == nil && key == i.StatKey {
 			return i, true, nil
 		}
 	}
-	fresh, e := buildWithOptions(root, skip, opts)
+	fresh, e := buildWithOptions(abs, skip, opts)
 	if e != nil {
 		return Index{}, false, e
 	}
