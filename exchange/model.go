@@ -256,11 +256,16 @@ type Unit struct {
 	// Provenance is human|inferred|reconciled (human default), carried
 	// in the unit envelope (non-breaking, omitempty keeps old payloads
 	// valid) and mirrored from draft top-level fields.
-	Provenance       string      `json:"provenance,omitempty"`
-	SourcePromptHash string      `json:"sourcePromptHash,omitempty"`
-	Confidence       float64     `json:"confidence,omitempty"`
-	SourceCommitSha  string      `json:"sourceCommitSha,omitempty"`
-	CaptureMeta      CaptureMeta `json:"captureMeta,omitempty"`
+	Provenance       string  `json:"provenance,omitempty"`
+	SourcePromptHash string  `json:"sourcePromptHash,omitempty"`
+	Confidence       float64 `json:"confidence,omitempty"`
+	// HasConfidence records that the source DECLARED a confidence, so the
+	// envelope can tell "declared 0.0" (a claim) from "not declared"
+	// (absence). Confidence alone cannot: 0 is both the zero value and a
+	// legal claim, and omitempty would drop the claim from unit.json.
+	HasConfidence   bool        `json:"hasConfidence,omitempty"`
+	SourceCommitSha string      `json:"sourceCommitSha,omitempty"`
+	CaptureMeta     CaptureMeta `json:"captureMeta,omitempty"`
 	// Freshness (validity horizon ADR): the declared validity horizon
 	// and the last human confirmation, both absolute YYYY-MM-DD dates,
 	// "" when undeclared. Additive envelope metadata: omitempty keeps
@@ -361,10 +366,14 @@ type Classification struct {
 	Domain string `json:"domain,omitempty"`
 }
 
-// CaptureMeta holds the classifier/dedupe metadata (ADR-035 v3).
+// CaptureMeta holds the classifier/dedupe metadata (ADR-035 v3,
+// spec provenance-capture:1). Title is the normalized title text the
+// dedupeKey was computed from; it travels with the key because the key is
+// a one-way hash and cannot be compared back against a title.
 type CaptureMeta struct {
 	Classifier string `json:"classifier,omitempty"`
 	DedupeKey  string `json:"dedupeKey,omitempty"`
+	Title      string `json:"title,omitempty"`
 }
 
 // ContentRef is the representation-tagged payload reference (RSF §6.1):

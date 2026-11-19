@@ -125,10 +125,14 @@ type Relationship struct {
 	Target string `json:"target"`
 }
 
-// CaptureMeta holds classifier/dedupe metadata (ADR-035 v3).
+// CaptureMeta holds classifier/dedupe metadata (ADR-035 v3,
+// spec provenance-capture:1) — the same three fields the exchange unit
+// carries, title included: the focus projection must not be lossier than the
+// object it projects.
 type CaptureMeta struct {
 	Classifier string `json:"classifier,omitempty"`
 	DedupeKey  string `json:"dedupeKey,omitempty"`
+	Title      string `json:"title,omitempty"`
 }
 
 // Content is the representation-tagged knowledge payload of the focus

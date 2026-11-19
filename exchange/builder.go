@@ -382,6 +382,20 @@ func toUnit(la *loadedArtifact) *Unit {
 		Classification:        classification,
 		Phase:                 la.Phase,
 		Provenance:            provenance,
+		// The rest of the ADR-035 envelope travels the same way: the
+		// exchange unit is authoritative during transport, so every field
+		// the artifact declared is projected here or it is lost on export
+		// (the package is what the next import reads). HasConfidence keeps
+		// a declared 0.0 distinct from an absent confidence.
+		SourcePromptHash: la.SourcePromptHash,
+		Confidence:       la.Confidence,
+		HasConfidence:    la.HasConfidence,
+		SourceCommitSha:  la.SourceCommitSha,
+		CaptureMeta: CaptureMeta{
+			Classifier: la.CaptureMeta.Classifier,
+			DedupeKey:  la.CaptureMeta.DedupeKey,
+			Title:      la.CaptureMeta.Title,
+		},
 		// The unit content is the compiled structured-json payload
 		// (spec-standard-v2 §3.3, §6); legacy structured-text payloads
 		// remain readable at import but are never emitted.

@@ -1,0 +1,4 @@
+version: 1
+project: eka-notes-fixture
+name: notes
+namespace: eka-notes-fixture

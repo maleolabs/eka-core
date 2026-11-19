@@ -401,6 +401,14 @@ func (c CaptureService) DedupeCheck(rt *Runtime, project, dedupeKey string, wind
 // similarity-aware dedupe path; DedupeCheck remains the exact-hash path for
 // callers that only have the hash. Title is the raw title string (will be
 // normalized inside).
+//
+// The similarity comparison uses the title recorded with the capture
+// (captureMeta.title), not the draft identifier: the identifier is a slug the
+// capture did not choose, so comparing against it misses every draft whose
+// title and id differ. Drafts captured before the title was recorded have no
+// preimage to compare (the key is a one-way hash), so they keep the
+// identifier as the fallback — the old behaviour, applied only where no
+// recorded title exists.
 func (c CaptureService) DedupeCheckByTitle(rt *Runtime, project, title string, window time.Duration, now time.Time) (*Draft, bool) {
 	if title == "" {
 		return nil, false
@@ -433,15 +441,17 @@ func (c CaptureService) DedupeCheckByTitle(rt *Runtime, project, title string, w
 			cp := d
 			return &cp, true
 		}
-		// Similarity path: compare normalized incoming title vs normalized
-		// existing title derived from the draft's ID (slug) or, when
-		// available, from the stored dedupeKey's preimage approximated via
-		// the draft ID's normalized form. Using ID as proxy is deterministic
-		// and matches the gateway's slug-from-title convention.
-		normExisting := c.NormalizeTitle(d.ID)
-		// If the draft carries a dedupeKey, we can also try to reconstruct
-		// via scanning the draft's content for a title-like field, but ID
-		// is the stable fallback.
+		// Similarity path: compare the normalized incoming title against the
+		// title the existing draft was captured from. The draft records that
+		// title (captureMeta.title, already normalized when written); older
+		// drafts recorded only the hash, whose preimage is unrecoverable, so
+		// they fall back to normalizing the identifier — a slug the capture
+		// did not choose, which is why a captured title that differs from
+		// its slug could never dedupe before the title was recorded.
+		normExisting := a.CaptureMeta.Title
+		if normExisting == "" {
+			normExisting = c.NormalizeTitle(d.ID)
+		}
 		if c.IsSimilar(normIncoming, normExisting) {
 			if d.Updated != "" {
 				if t, err := time.Parse(time.RFC3339, d.Updated); err == nil {
@@ -455,12 +465,6 @@ func (c CaptureService) DedupeCheckByTitle(rt *Runtime, project, title string, w
 			cp := d
 			return &cp, true
 		}
-		// Also compare against the draft's stored normalized title when the
-		// draft's ID is generic (e.g. "orig" in tests) but its dedupeKey
-		// was derived from a different title. In that case the ID proxy
-		// fails, so we fall back to comparing the incoming normalized title
-		// against the existing draft's dedupeKey hash equality only (already
-		// handled). No further heuristic.
 	}
 	return nil, false
 }

@@ -115,6 +115,15 @@ type Artifact struct {
 type CaptureMeta struct {
 	Classifier string
 	DedupeKey  string
+	// Title is the NORMALIZED title text the DedupeKey was computed from
+	// (spec provenance-capture:1): lowercase, non-alphanumerics folded to
+	// spaces, whitespace collapsed and trimmed. Recording it is what lets
+	// dedupe compare a new capture against the title that actually
+	// produced the key — the key is a one-way hash, and the draft
+	// identifier is a slug that need not resemble the title. A title that
+	// does not hash to DedupeKey is a producer defect, not a structural
+	// violation, so no rule refuses the mismatch.
+	Title string
 }
 
 // Provenance constants (ADR-035 v3).
@@ -238,6 +247,13 @@ func analyzeMarkdown(relPath, absPath string, data []byte, requireInstanceVersio
 	if a == nil {
 		return nil, results
 	}
+	// The ADR-035 capture envelope is format-neutral: the Markdown
+	// frontmatter carries the same keys as the JSON document, so it is
+	// validated by the same pass. Reading it here is what makes the
+	// envelope survive transport for Markdown-native repositories —
+	// without it an export writes values the next import (through this
+	// adapter) drops, and the claim is lost with no finding.
+	results = append(results, classifyEnvelope(a, relPath, fm)...)
 	a.BodyLines = lines[closeIdx+1:]
 	return a, results
 }
@@ -447,124 +463,134 @@ func analyzeJSON(relPath, absPath string, data []byte, requireInstanceVersion bo
 	results = append(results, classifyResults...)
 	if a != nil {
 		a.ContentFields = contentFields
-		// Provenance fields (ADR-035 v3): top-level provenance enum + capture metadata.
-		if v, ok := root["provenance"]; ok {
-			s, ok := v.(string)
-			if !ok {
-				results = append(results, Result{
-					File: relPath, Rule: RuleStructural, Severity: SeverityError,
-					Message: "`provenance` must be a string (human|inferred|reconciled)",
-				})
-			} else if !ValidProvenance(s) {
-				results = append(results, Result{
-					File: relPath, Rule: RuleStructural, Severity: SeverityError,
-					Message: fmt.Sprintf("provenance %q must be one of human|inferred|reconciled", s),
-				})
-			} else {
-				a.Provenance = s
-			}
-		} else {
-			a.Provenance = ProvenanceHuman
-		}
-		if v, ok := root["sourcePromptHash"]; ok {
-			s, ok := v.(string)
-			if !ok || s == "" {
-				results = append(results, Result{
-					File: relPath, Rule: RuleStructural, Severity: SeverityError,
-					Message: "`sourcePromptHash` must be a non-empty hex string",
-				})
-			} else if !isHexString(s, 64) {
-				results = append(results, Result{
-					File: relPath, Rule: RuleStructural, Severity: SeverityError,
-					Message: "`sourcePromptHash` must be a 64-char hex sha256",
-				})
-			} else {
-				a.SourcePromptHash = s
-			}
-		}
-		if v, ok := root["confidence"]; ok {
-			f, ok := asFloat64(v)
-			if !ok {
-				results = append(results, Result{
-					File: relPath, Rule: RuleStructural, Severity: SeverityError,
-					Message: "`confidence` must be a number 0.0-1.0",
-				})
-			} else if f < 0 || f > 1 {
-				results = append(results, Result{
-					File: relPath, Rule: RuleStructural, Severity: SeverityError,
-					Message: fmt.Sprintf("confidence %v must be 0.0-1.0", f),
-				})
-			} else {
-				a.Confidence = f
-				a.HasConfidence = true
-			}
-		}
-		if v, ok := root["sourceCommitSha"]; ok {
-			s, ok := v.(string)
-			if !ok || s == "" {
-				results = append(results, Result{
-					File: relPath, Rule: RuleStructural, Severity: SeverityError,
-					Message: "`sourceCommitSha` must be a non-empty hex string",
-				})
-			} else if !isHexString(s, -1) || len(s) < 7 || len(s) > 40 {
-				results = append(results, Result{
-					File: relPath, Rule: RuleStructural, Severity: SeverityError,
-					Message: "`sourceCommitSha` must be a 7-40 char hex",
-				})
-			} else {
-				a.SourceCommitSha = s
-			}
-		}
-		if v, ok := root["captureMeta"]; ok {
-			m, ok := v.(map[string]any)
-			if !ok {
-				results = append(results, Result{
-					File: relPath, Rule: RuleStructural, Severity: SeverityError,
-					Message: "`captureMeta` must be an object {classifier, dedupeKey}",
-				})
-			} else {
-				if cv, ok := m["classifier"]; ok {
-					if s, ok := cv.(string); ok {
-						a.CaptureMeta.Classifier = s
-					} else {
-						results = append(results, Result{
-							File: relPath, Rule: RuleStructural, Severity: SeverityError,
-							Message: "`captureMeta.classifier` must be a string",
-						})
-					}
-				}
-				if dv, ok := m["dedupeKey"]; ok {
-					if s, ok := dv.(string); ok {
-						if !isHexString(s, 64) && s != "" {
-							results = append(results, Result{
-								File: relPath, Rule: RuleStructural, Severity: SeverityError,
-								Message: "`captureMeta.dedupeKey` must be a 64-char hex hash",
-							})
-						} else {
-							a.CaptureMeta.DedupeKey = s
-						}
-					} else {
-						results = append(results, Result{
-							File: relPath, Rule: RuleStructural, Severity: SeverityError,
-							Message: "`captureMeta.dedupeKey` must be a string",
-						})
-					}
-				}
-				for k := range m {
-					if k != "classifier" && k != "dedupeKey" {
-						results = append(results, Result{
-							File: relPath, Rule: RuleStructural, Severity: SeverityError,
-							Message: fmt.Sprintf("unknown captureMeta field %q", k),
-						})
-					}
-				}
-			}
-		}
+		results = append(results, classifyEnvelope(a, relPath, root)...)
 		if a.Provenance == "" {
+			// The JSON adapter reports the human default explicitly
+			// (ADR-035 v3: an undeclared provenance is human). The
+			// Markdown adapter leaves it empty for the same claim; the
+			// exchange envelope normalises both spellings to absence, so
+			// the difference never reaches a package.
 			a.Provenance = ProvenanceHuman
 		}
 	}
 	return a, results
+}
+
+// captureMetaKeys is the allowed field set of the captureMeta object
+// (spec provenance-capture:1): classifier, dedupeKey, and title — the
+// normalized title text the dedupeKey was computed from. One list feeds
+// both the shape diagnostic and the unknown-field refusal so the two can
+// never disagree about what is allowed.
+var captureMetaKeys = []string{"classifier", "dedupeKey", "title"}
+
+// classifyEnvelope validates and records the ADR-035 capture envelope
+// (provenance, sourcePromptHash, confidence, sourceCommitSha,
+// captureMeta) from a decoded metadata map.
+//
+// Both adapters call it with the map they decoded: the JSON root and the
+// Markdown frontmatter. The envelope is format-neutral, so a claim must be
+// validated identically whichever spelling it arrives in — a second copy
+// of these checks is how one adapter starts accepting what the other
+// refuses, which shows up as write-only metadata (exported, then dropped on
+// re-import) rather than as a finding.
+//
+// Absence is honoured for every field: a missing key records nothing. The
+// human provenance default is deliberately NOT applied here — the JSON
+// adapter reports it, the Markdown adapter leaves the field empty, and the
+// exchange envelope treats both as "no declaration".
+func classifyEnvelope(a *Artifact, relPath string, meta map[string]any) []Result {
+	var results []Result
+	add := func(format string, args ...any) {
+		results = append(results, Result{
+			File: relPath, Rule: RuleStructural, Severity: SeverityError,
+			Message: fmt.Sprintf(format, args...),
+		})
+	}
+	if v, ok := meta["provenance"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			add("`provenance` must be a string (human|inferred|reconciled)")
+		} else if !ValidProvenance(s) {
+			add("provenance %q must be one of human|inferred|reconciled", s)
+		} else {
+			a.Provenance = s
+		}
+	}
+	if v, ok := meta["sourcePromptHash"]; ok {
+		s, ok := v.(string)
+		if !ok || s == "" {
+			add("`sourcePromptHash` must be a non-empty hex string")
+		} else if !isHexString(s, 64) {
+			add("`sourcePromptHash` must be a 64-char hex sha256")
+		} else {
+			a.SourcePromptHash = s
+		}
+	}
+	if v, ok := meta["confidence"]; ok {
+		f, ok := asFloat64(v)
+		if !ok {
+			add("`confidence` must be a number 0.0-1.0")
+		} else if f < 0 || f > 1 {
+			add("confidence %v must be 0.0-1.0", f)
+		} else {
+			a.Confidence = f
+			a.HasConfidence = true
+		}
+	}
+	if v, ok := meta["sourceCommitSha"]; ok {
+		s, ok := v.(string)
+		if !ok || s == "" {
+			add("`sourceCommitSha` must be a non-empty hex string")
+		} else if !isHexString(s, -1) || len(s) < 7 || len(s) > 40 {
+			add("`sourceCommitSha` must be a 7-40 char hex")
+		} else {
+			a.SourceCommitSha = s
+		}
+	}
+	if v, ok := meta["captureMeta"]; ok {
+		m, ok := v.(map[string]any)
+		if !ok {
+			add("`captureMeta` must be an object {%s}", strings.Join(captureMetaKeys, ", "))
+			return results
+		}
+		if cv, ok := m["classifier"]; ok {
+			if s, ok := cv.(string); ok {
+				a.CaptureMeta.Classifier = s
+			} else {
+				add("`captureMeta.classifier` must be a string")
+			}
+		}
+		if dv, ok := m["dedupeKey"]; ok {
+			if s, ok := dv.(string); ok {
+				if !isHexString(s, 64) && s != "" {
+					add("`captureMeta.dedupeKey` must be a 64-char hex hash")
+				} else {
+					a.CaptureMeta.DedupeKey = s
+				}
+			} else {
+				add("`captureMeta.dedupeKey` must be a string")
+			}
+		}
+		// title is the normalized title text the dedupeKey was computed
+		// from (spec provenance-capture:1). Any string is accepted: the
+		// stored form is already normalized, and a title that disagrees
+		// with the key is a producer defect, not a structural violation —
+		// refusing it here would reject a draft the runtime can still
+		// dedupe by key.
+		if tv, ok := m["title"]; ok {
+			if s, ok := tv.(string); ok {
+				a.CaptureMeta.Title = s
+			} else {
+				add("`captureMeta.title` must be a string")
+			}
+		}
+		for k := range m {
+			if !contains(captureMetaKeys, k) {
+				add("unknown captureMeta field %q", k)
+			}
+		}
+	}
+	return results
 }
 
 // isStringOrObject reports whether v is a content value of the allowed

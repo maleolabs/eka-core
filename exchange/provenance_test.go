@@ -21,12 +21,11 @@ import (
 // moment knowledge leaves its source repository and no consumer can tell the
 // difference from a human-authored artifact.
 //
-// The only representation that can carry a declaration is the v2.0 JSON
-// authoring document (conformance.analyzeJSON reads the top-level
-// `provenance` field), so the end-to-end guards below use JSON artifacts. The
-// legacy Markdown branch is covered at the rendering level only
-// (TestBuildFrontmatterProvenance): its adapter does not read the field back,
-// a documented reader gap on the conformance side.
+// The end-to-end guards below use JSON artifacts because that is the
+// representation an import writes; the Markdown reader is guarded separately
+// (conformance/envelope_test.go, and the Markdown half of the envelope
+// round trip in envelope_test.go), since a Markdown-native repository is
+// where a write-only envelope would otherwise go unnoticed.
 
 // provenanceArtifact is one JSON-native story artifact; %s is the artifact id,
 // %s the provenance line (empty for the absence case). The story type is used
@@ -178,9 +177,9 @@ func TestImportRoundTripInventsNoProvenance(t *testing.T) {
 // TestBuildFrontmatterProvenance pins the write side of the legacy Markdown
 // rendering: a non-default declaration is emitted, the default and the absence
 // are not, and a value outside the enum is refused before anything is staged
-// (the Markdown adapter would otherwise swallow it silently). The field is not
-// readable back from Markdown today — that is the conformance reader gap, not
-// a licence to drop or invent it here.
+// (the Markdown adapter would otherwise refuse the artifact it just
+// round-tripped, turning a claim into a validation failure of a file this
+// engine wrote).
 func TestBuildFrontmatterProvenance(t *testing.T) {
 	identity := Identity{Namespace: "prov", Type: "adr", ID: "x", InstanceVersion: 1}
 	for _, c := range []struct {

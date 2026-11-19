@@ -155,10 +155,15 @@ type Classification struct {
 	Domain              string   `json:"domain,omitempty"`
 }
 
-// CaptureMeta holds classifier/dedupe metadata (ADR-035 v3).
+// CaptureMeta holds classifier/dedupe metadata (ADR-035 v3,
+// spec provenance-capture:1) — the same three fields the exchange unit
+// carries, title included: the document is a projection of the object, so a
+// field it dropped would be unrecoverable from the machine surface while
+// still present in the knowledge.
 type CaptureMeta struct {
 	Classifier string `json:"classifier,omitempty"`
 	DedupeKey  string `json:"dedupeKey,omitempty"`
+	Title      string `json:"title,omitempty"`
 }
 
 // Content is the representation-tagged knowledge payload: the opaque
@@ -251,12 +256,14 @@ func NewDocument(u *exchange.Unit) (*Document, error) {
 		Content:    content,
 		ObjectHash: u.Digest,
 	}
-	if u.Confidence != 0 {
+	// A declared 0.0 is a claim, not an absence (hasConfidence): render it
+	// like any other declared value so the projection matches the object.
+	if u.HasConfidence || u.Confidence != 0 {
 		v := u.Confidence
 		doc.Confidence = &v
 	}
-	if u.CaptureMeta.Classifier != "" || u.CaptureMeta.DedupeKey != "" {
-		doc.CaptureMeta = &CaptureMeta{Classifier: u.CaptureMeta.Classifier, DedupeKey: u.CaptureMeta.DedupeKey}
+	if u.CaptureMeta.Classifier != "" || u.CaptureMeta.DedupeKey != "" || u.CaptureMeta.Title != "" {
+		doc.CaptureMeta = &CaptureMeta{Classifier: u.CaptureMeta.Classifier, DedupeKey: u.CaptureMeta.DedupeKey, Title: u.CaptureMeta.Title}
 	}
 	if u.Classification.Dimension != "" || len(u.Classification.DimensionsSecondary) > 0 || u.Classification.Domain != "" {
 		c := Classification{

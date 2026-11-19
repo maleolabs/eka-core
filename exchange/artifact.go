@@ -100,13 +100,14 @@ func (u *Unit) ToArtifact() *conformance.Artifact {
 		a.Provenance = conformance.ProvenanceHuman
 	}
 	a.SourcePromptHash = u.SourcePromptHash
-	if u.Confidence != 0 {
-		a.Confidence = u.Confidence
+	if v := artifactConfidence(u); v != nil {
+		a.Confidence = *v
 		a.HasConfidence = true
 	}
 	a.SourceCommitSha = u.SourceCommitSha
 	a.CaptureMeta.Classifier = u.CaptureMeta.Classifier
 	a.CaptureMeta.DedupeKey = u.CaptureMeta.DedupeKey
+	a.CaptureMeta.Title = u.CaptureMeta.Title
 	a.ValidUntil = u.ValidUntil
 	a.LastConfirmed = u.LastConfirmed
 	a.BodyLines = strings.Split(string(u.ContentPayload), "\n")

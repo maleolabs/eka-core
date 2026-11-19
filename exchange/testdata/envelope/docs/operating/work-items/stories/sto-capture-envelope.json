@@ -1,0 +1,45 @@
+{
+  "namespace": "eka-envelope-fixture",
+  "type": "sto",
+  "id": "capture-envelope",
+  "instanceVersion": 1,
+  "revision": 1,
+  "author": "Marij",
+  "created": "2026-11-18",
+  "updated": "2026-11-18",
+  "provenance": "reconciled",
+  "sourcePromptHash": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f899",
+  "confidence": 0.75,
+  "sourceCommitSha": "9f2c1ab",
+  "captureMeta": {
+    "classifier": "keyword-heuristic v1",
+    "dedupeKey": "baa5aaccde46c090defb13466671576fb2dcb9ed156fca2eede09905784030e0",
+    "title": "fix login bug"
+  },
+  "validUntil": "2027-06-30",
+  "lastConfirmed": "2026-11-18",
+  "state": {
+    "executionState": "todo",
+    "existenceState": "active"
+  },
+  "changeLog": [
+    {
+      "date": "2026-11-18",
+      "domain": "existenceState",
+      "from": "-",
+      "to": "active",
+      "by": "Marij"
+    },
+    {
+      "date": "2026-11-18",
+      "domain": "executionState",
+      "from": "-",
+      "to": "todo",
+      "by": "Marij"
+    }
+  ],
+  "content": {
+    "description": "Captured story whose envelope must survive transport.",
+    "acceptanceCriteria": "Every declared envelope field reaches the package."
+  }
+}

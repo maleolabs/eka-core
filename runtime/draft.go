@@ -134,9 +134,16 @@ type NewDraftRequest struct {
 }
 
 // CaptureMeta mirrors conformance.CaptureMeta for draft authoring.
+//
+// Title is the title the DedupeKey was computed from. The draft writer
+// stores it normalized (Capture.NormalizeTitle), so the stored text is the
+// key's preimage and dedupe can compare titles instead of the draft
+// identifier — a slug the capture did not choose and that need not resemble
+// the title.
 type CaptureMeta struct {
 	Classifier string `json:"classifier,omitempty"`
 	DedupeKey  string `json:"dedupeKey,omitempty"`
+	Title      string `json:"title,omitempty"`
 }
 
 // PublishOptions configures one publish run. Documented deviation from
@@ -689,10 +696,17 @@ func draftJSON(req NewDraftRequest, extraContent map[string]any) ([]byte, error)
 	if req.SourceCommitSha != "" {
 		doc.SourceCommitSha = req.SourceCommitSha
 	}
-	if req.CaptureMeta.Classifier != "" || req.CaptureMeta.DedupeKey != "" {
+	if req.CaptureMeta.Classifier != "" || req.CaptureMeta.DedupeKey != "" || req.CaptureMeta.Title != "" {
 		doc.CaptureMeta = &CaptureMeta{
 			Classifier: req.CaptureMeta.Classifier,
 			DedupeKey:  req.CaptureMeta.DedupeKey,
+			// Stored normalized — the same text DedupeKey hashes
+			// (sha256 of the normalized title). Normalizing here rather
+			// than trusting the caller is what keeps the recorded title
+			// and the key from disagreeing when the caller hands over the
+			// raw title; NormalizeTitle is idempotent, so an
+			// already-normalized title is unchanged.
+			Title: Capture.NormalizeTitle(req.CaptureMeta.Title),
 		}
 	}
 	// Freshness (validity horizon ADR): the key is always scaffolded so
@@ -1004,6 +1018,7 @@ func unitFromDraft(a *conformance.Artifact, version int) *exchange.Unit {
 		CaptureMeta: exchange.CaptureMeta{
 			Classifier: a.CaptureMeta.Classifier,
 			DedupeKey:  a.CaptureMeta.DedupeKey,
+			Title:      a.CaptureMeta.Title,
 		},
 		Content: exchange.ContentRef{
 			Representation: exchange.StructuredJSON,
@@ -1015,6 +1030,7 @@ func unitFromDraft(a *conformance.Artifact, version int) *exchange.Unit {
 	}
 	if a.HasConfidence {
 		u.Confidence = a.Confidence
+		u.HasConfidence = true
 	}
 	for _, e := range a.ChangeLog {
 		u.ChangeLog = append(u.ChangeLog, exchange.ChangeLogEntry{
@@ -1441,6 +1457,7 @@ func draftsInProject(root, project string) ([]Draft, error) {
 			d.HasConfidence = artifact.HasConfidence
 			d.CaptureMeta.Classifier = artifact.CaptureMeta.Classifier
 			d.CaptureMeta.DedupeKey = artifact.CaptureMeta.DedupeKey
+			d.CaptureMeta.Title = artifact.CaptureMeta.Title
 		} else {
 			d.Provenance = conformance.ProvenanceHuman
 		}

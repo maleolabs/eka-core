@@ -6,18 +6,16 @@ import (
 	"github.com/maleolabs/eka-core/conformance"
 )
 
-// TestToArtifactCarriesFreshnessAndProvenance is the round-trip guard of
-// the envelope extension for the unit -> artifact direction: ToArtifact
-// projects the freshness fields (validUntil, lastConfirmed) and the
-// ADR-035 provenance capture fields the unit carries.
+// TestToArtifactCarriesFreshnessAndProvenance is the unit -> artifact
+// direction of the envelope guard: ToArtifact projects the freshness fields
+// (validUntil, lastConfirmed) and the ADR-035 capture fields the unit
+// carries (provenance, sourcePromptHash, confidence, sourceCommitSha,
+// captureMeta).
 //
-// The artifact -> unit direction is NOT fixed here: builder.go toUnit now
-// projects provenance (guarded by provenance_test.go, which owns the
-// export -> import -> export contract), but the other capture fields
-// (sourcePromptHash, confidence, sourceCommitSha, captureMeta) are still
-// left empty on that direction, because the compiled content object does
-// not carry them back. That remaining defect predates this change and needs
-// its own ADR-035 decision.
+// Both directions are guarded: builder.go toUnit projects the same fields
+// back (provenance_test.go owns the export -> import -> export contract,
+// envelope_test.go the rest of the envelope), so neither direction can drop
+// a claim and leave it write-only.
 func TestToArtifactCarriesFreshnessAndProvenance(t *testing.T) {
 	u := &Unit{
 		Identity:              Identity{Namespace: "eka", Type: "adr", ID: "round-trip", InstanceVersion: 1},
