@@ -133,9 +133,15 @@ const (
 	ProvenanceReconciled = "reconciled"
 )
 
+// provenanceValues is the provenance vocabulary in canonical order. The
+// diagnostic that names the allowed values and the validator that accepts
+// them share this list, so a new enum value cannot be accepted by one and
+// reported as unknown by the other.
+var provenanceValues = []string{ProvenanceHuman, ProvenanceInferred, ProvenanceReconciled}
+
 // validProvenance reports whether p is a valid provenance enum value.
 func ValidProvenance(p string) bool {
-	return p == ProvenanceHuman || p == ProvenanceInferred || p == ProvenanceReconciled
+	return contains(provenanceValues, p)
 }
 
 // ChangeLogEntry is one parsed {date, domain, from, to, by} entry.
@@ -262,31 +268,35 @@ func analyzeMarkdown(relPath, absPath string, data []byte, requireInstanceVersio
 // authoring schema (spec-standard-v2 §3.2). Unknown top-level fields are
 // rejected (R0) — strict schema, the same reject-by-default philosophy as
 // the RSF.
-var allowedJSONTopLevel = map[string]bool{
-	"namespace":           true,
-	"type":                true,
-	"id":                  true,
-	"instanceVersion":     true,
-	"revision":            true,
-	"author":              true,
-	"created":             true,
-	"updated":             true,
-	"state":               true,
-	"phase":               true,
-	"dimension":           true,
-	"dimensionsSecondary": true,
-	"domain":              true,
-	"relationships":       true,
-	"changeLog":           true,
-	"content":             true,
-	"provenance":          true,
-	"sourcePromptHash":    true,
-	"confidence":          true,
-	"sourceCommitSha":     true,
-	"captureMeta":         true,
-	"validUntil":          true,
-	"lastConfirmed":       true,
-}
+//
+// The envelope keys are appended from envelopeFields rather than restated
+// here: an allowlisted field the envelope pass never reads (or a field it
+// reads but the allowlist forgets) is a silent loss, and the table is the
+// one place that knows which keys exist.
+var allowedJSONTopLevel = func() map[string]bool {
+	base := map[string]bool{
+		"namespace":           true,
+		"type":                true,
+		"id":                  true,
+		"instanceVersion":     true,
+		"revision":            true,
+		"author":              true,
+		"created":             true,
+		"updated":             true,
+		"state":               true,
+		"phase":               true,
+		"dimension":           true,
+		"dimensionsSecondary": true,
+		"domain":              true,
+		"relationships":       true,
+		"changeLog":           true,
+		"content":             true,
+	}
+	for _, f := range envelopeFields {
+		base[f.key] = true
+	}
+	return base
+}()
 
 // analyzeJSON is the v2.0 JSON-native authoring adapter
 // (spec-standard-v2 §3.2): parses the schema into the same Artifact
@@ -367,8 +377,7 @@ func analyzeJSON(relPath, absPath string, data []byte, requireInstanceVersion bo
 	// kebab internal names (the engine is v1.1-shaped; JSON is the
 	// authoring spelling).
 	fm := make(map[string]any, len(root))
-	for _, k := range []string{"namespace", "type", "id", "revision", "author", "created", "updated", "phase", "dimension", "domain",
-		"validUntil", "lastConfirmed"} {
+	for _, k := range []string{"namespace", "type", "id", "revision", "author", "created", "updated", "phase", "dimension", "domain"} {
 		if v, ok := root[k]; ok {
 			fm[k] = v
 		}
@@ -476,22 +485,163 @@ func analyzeJSON(relPath, absPath string, data []byte, requireInstanceVersion bo
 	return a, results
 }
 
-// captureMetaKeys is the allowed field set of the captureMeta object
-// (spec provenance-capture:1): classifier, dedupeKey, and title — the
-// normalized title text the dedupeKey was computed from. One list feeds
-// both the shape diagnostic and the unknown-field refusal so the two can
-// never disagree about what is allowed.
-var captureMetaKeys = []string{"classifier", "dedupeKey", "title"}
+// --- Capture envelope (ADR-035 v3, spec provenance-capture:1). ---
+//
+// The envelope field set is declared ONCE, as data. Both adapters read the
+// same camelCase keys (analyzeJSON from the document root, analyzeMarkdown
+// from the frontmatter map), the JSON allowlist is derived from the table,
+// and the exchange unit projection is checked against it by
+// envelope_manifest_test.go. The failure this prevents is silent: a field
+// added to the Artifact model and to the allowlist but not to the unit
+// projection exports as "not declared", with no finding — the claim leaves
+// the repository and nothing ever reports it.
+
+// envelopeKind is the structural shape of one envelope value. Each kind has
+// exactly one validation arm (validateEnvelopeValue), so the two adapters
+// cannot disagree about a shape: they share the pass, not a copy of the
+// rules.
+type envelopeKind int
+
+const (
+	// envelopeProvenance: the provenance enum (human|inferred|reconciled;
+	// human is the default by absence).
+	envelopeProvenance envelopeKind = iota
+	// envelopeHex64: exactly 64 hex characters (a sha256 digest).
+	envelopeHex64
+	// envelopeHex7to40: 7-40 hex characters (an abbreviated or full commit
+	// sha).
+	envelopeHex7to40
+	// envelopeHex64OrEmpty: 64 hex characters or "" — an absent dedupeKey is
+	// a legitimate capture state, unlike an absent prompt hash.
+	envelopeHex64OrEmpty
+	// envelopeConfidence: a number in [0.0, 1.0]; 0.0 is a claim, not
+	// absence.
+	envelopeConfidence
+	// envelopeDate: a real calendar date in YYYY-MM-DD.
+	envelopeDate
+	// envelopeString: any string (the normalized capture title).
+	envelopeString
+	// envelopeCaptureMeta: the nested object whose fields are
+	// captureMetaFields.
+	envelopeCaptureMeta
+)
+
+// envelopeValue is one validated envelope value; exactly one arm is set, per
+// the field's kind. set is false when nothing may be recorded: a refused
+// shape records nothing (a zero value would re-spell invalid input as a
+// declaration), while a nested block records the children that validated.
+type envelopeValue struct {
+	set  bool
+	str  string
+	num  float64
+	meta CaptureMeta
+}
+
+// envelopeField is one field of the envelope: the metadata key (camelCase,
+// read by both adapters), the kind that defines its shape, and where a
+// validated value lands.
+type envelopeField struct {
+	key  string
+	kind envelopeKind
+	// flag is the boolean the exchange unit carries next to the value so a
+	// declared zero stays distinct from absence (hasConfidence for
+	// confidence; "" where none is needed — no other field can legally be
+	// zero, since a zero-length hash or date is refused). It is data because
+	// the unit projection is checked against this table.
+	flag string
+	// record stores a validated value on the artifact. The artifact is a
+	// struct, so each field needs one line saying where its value goes; what
+	// actually drifts — which keys exist, their shapes, their messages —
+	// stays table-driven.
+	record func(*Artifact, envelopeValue)
+}
+
+// envelopeFields is THE declaration of the capture envelope. The order is the
+// diagnostic order: findings are appended in it.
+var envelopeFields = []envelopeField{
+	{key: "provenance", kind: envelopeProvenance,
+		record: func(a *Artifact, v envelopeValue) { a.Provenance = v.str }},
+	{key: "sourcePromptHash", kind: envelopeHex64,
+		record: func(a *Artifact, v envelopeValue) { a.SourcePromptHash = v.str }},
+	{key: "confidence", kind: envelopeConfidence, flag: "HasConfidence",
+		record: func(a *Artifact, v envelopeValue) {
+			a.Confidence = v.num
+			a.HasConfidence = true
+		}},
+	{key: "sourceCommitSha", kind: envelopeHex7to40,
+		record: func(a *Artifact, v envelopeValue) { a.SourceCommitSha = v.str }},
+	{key: "captureMeta", kind: envelopeCaptureMeta,
+		record: func(a *Artifact, v envelopeValue) { a.CaptureMeta = v.meta }},
+	{key: "validUntil", kind: envelopeDate,
+		record: func(a *Artifact, v envelopeValue) { a.ValidUntil = v.str }},
+	{key: "lastConfirmed", kind: envelopeDate,
+		record: func(a *Artifact, v envelopeValue) { a.LastConfirmed = v.str }},
+}
+
+// captureMetaField is one field of the nested captureMeta object.
+type captureMetaField struct {
+	key    string
+	kind   envelopeKind
+	record func(*CaptureMeta, envelopeValue)
+}
+
+// captureMetaFields is the allowed field set of the captureMeta object (spec
+// provenance-capture:1): classifier, dedupeKey, and title — the normalized
+// title text the dedupeKey was computed from. Any string is accepted as the
+// title: the stored form is already normalized, and a title that disagrees
+// with the key is a producer defect, not a structural violation — refusing it
+// would reject a draft the runtime can still dedupe by key.
+var captureMetaFields = []captureMetaField{
+	{key: "classifier", kind: envelopeString,
+		record: func(cm *CaptureMeta, v envelopeValue) { cm.Classifier = v.str }},
+	{key: "dedupeKey", kind: envelopeHex64OrEmpty,
+		record: func(cm *CaptureMeta, v envelopeValue) { cm.DedupeKey = v.str }},
+	{key: "title", kind: envelopeString,
+		record: func(cm *CaptureMeta, v envelopeValue) { cm.Title = v.str }},
+}
+
+// captureMetaKeys is the allowed child set, derived from the table so the
+// shape diagnostic and the unknown-field refusal can never disagree about
+// what is allowed.
+var captureMetaKeys = func() []string {
+	out := make([]string, 0, len(captureMetaFields))
+	for _, f := range captureMetaFields {
+		out = append(out, f.key)
+	}
+	return out
+}()
+
+// EnvelopeManifestEntry is one row of the envelope declaration as seen from
+// outside this package: the metadata key plus the paired unit flag ("" when
+// the field needs none).
+type EnvelopeManifestEntry struct {
+	Key  string
+	Flag string
+}
+
+// EnvelopeManifest exposes the envelope field set to the anti-drift test,
+// which must live where both models are importable. This package cannot
+// import exchange (the dependency runs the other way: exchange projects units
+// onto this package's Artifact), so the unit projection of the same set can
+// only be checked from outside.
+func EnvelopeManifest() []EnvelopeManifestEntry {
+	out := make([]EnvelopeManifestEntry, 0, len(envelopeFields))
+	for _, f := range envelopeFields {
+		out = append(out, EnvelopeManifestEntry{Key: f.key, Flag: f.flag})
+	}
+	return out
+}
 
 // classifyEnvelope validates and records the ADR-035 capture envelope
-// (provenance, sourcePromptHash, confidence, sourceCommitSha,
-// captureMeta) from a decoded metadata map.
+// (provenance, sourcePromptHash, confidence, sourceCommitSha, captureMeta,
+// validUntil, lastConfirmed) from a decoded metadata map, iterating
+// envelopeFields.
 //
 // Both adapters call it with the map they decoded: the JSON root and the
 // Markdown frontmatter. The envelope is format-neutral, so a claim must be
-// validated identically whichever spelling it arrives in — a second copy
-// of these checks is how one adapter starts accepting what the other
-// refuses, which shows up as write-only metadata (exported, then dropped on
+// validated identically whichever spelling it arrives in — a second copy of
+// these checks is how one adapter starts accepting what the other refuses,
+// which shows up as write-only metadata (exported, then dropped on
 // re-import) rather than as a finding.
 //
 // Absence is honoured for every field: a missing key records nothing. The
@@ -500,97 +650,116 @@ var captureMetaKeys = []string{"classifier", "dedupeKey", "title"}
 // exchange envelope treats both as "no declaration".
 func classifyEnvelope(a *Artifact, relPath string, meta map[string]any) []Result {
 	var results []Result
-	add := func(format string, args ...any) {
-		results = append(results, Result{
-			File: relPath, Rule: RuleStructural, Severity: SeverityError,
-			Message: fmt.Sprintf(format, args...),
-		})
+	for _, f := range envelopeFields {
+		raw, ok := meta[f.key]
+		if !ok {
+			continue
+		}
+		val, msgs := validateEnvelopeValue(f.kind, f.key, raw)
+		for _, msg := range msgs {
+			results = append(results, Result{
+				File: relPath, Rule: RuleStructural, Severity: SeverityError,
+				Message: msg,
+			})
+		}
+		if val.set {
+			f.record(a, val)
+		}
 	}
-	if v, ok := meta["provenance"]; ok {
+	return results
+}
+
+// validateEnvelopeValue validates one envelope value against its kind and
+// returns the value to record plus the findings, if any. The messages are
+// part of the contract — they are what a repository author sees, and
+// conformance/envelope_test.go pins them — so a kind's wording is written
+// once, here.
+func validateEnvelopeValue(kind envelopeKind, key string, v any) (envelopeValue, []string) {
+	switch kind {
+	case envelopeProvenance:
 		s, ok := v.(string)
 		if !ok {
-			add("`provenance` must be a string (human|inferred|reconciled)")
-		} else if !ValidProvenance(s) {
-			add("provenance %q must be one of human|inferred|reconciled", s)
-		} else {
-			a.Provenance = s
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be a string (%s)", key, strings.Join(provenanceValues, "|"))}
 		}
-	}
-	if v, ok := meta["sourcePromptHash"]; ok {
+		if !ValidProvenance(s) {
+			return envelopeValue{}, []string{fmt.Sprintf("%s %q must be one of %s", key, s, strings.Join(provenanceValues, "|"))}
+		}
+		return envelopeValue{set: true, str: s}, nil
+	case envelopeHex64:
 		s, ok := v.(string)
 		if !ok || s == "" {
-			add("`sourcePromptHash` must be a non-empty hex string")
-		} else if !isHexString(s, 64) {
-			add("`sourcePromptHash` must be a 64-char hex sha256")
-		} else {
-			a.SourcePromptHash = s
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be a non-empty hex string", key)}
 		}
-	}
-	if v, ok := meta["confidence"]; ok {
+		if !isHexString(s, 64) {
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be a 64-char hex sha256", key)}
+		}
+		return envelopeValue{set: true, str: s}, nil
+	case envelopeHex7to40:
+		s, ok := v.(string)
+		if !ok || s == "" {
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be a non-empty hex string", key)}
+		}
+		if !isHexString(s, -1) || len(s) < 7 || len(s) > 40 {
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be a 7-40 char hex", key)}
+		}
+		return envelopeValue{set: true, str: s}, nil
+	case envelopeHex64OrEmpty:
+		s, ok := v.(string)
+		if !ok {
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be a string", key)}
+		}
+		if s != "" && !isHexString(s, 64) {
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be a 64-char hex hash", key)}
+		}
+		return envelopeValue{set: true, str: s}, nil
+	case envelopeConfidence:
 		f, ok := asFloat64(v)
 		if !ok {
-			add("`confidence` must be a number 0.0-1.0")
-		} else if f < 0 || f > 1 {
-			add("confidence %v must be 0.0-1.0", f)
-		} else {
-			a.Confidence = f
-			a.HasConfidence = true
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be a number 0.0-1.0", key)}
 		}
-	}
-	if v, ok := meta["sourceCommitSha"]; ok {
+		if f < 0 || f > 1 {
+			return envelopeValue{}, []string{fmt.Sprintf("%s %v must be 0.0-1.0", key, f)}
+		}
+		return envelopeValue{set: true, num: f}, nil
+	case envelopeDate:
+		s, ok := asDateString(v)
+		if !ok || !validDate(s) {
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be a date in YYYY-MM-DD format", key)}
+		}
+		return envelopeValue{set: true, str: s}, nil
+	case envelopeString:
 		s, ok := v.(string)
-		if !ok || s == "" {
-			add("`sourceCommitSha` must be a non-empty hex string")
-		} else if !isHexString(s, -1) || len(s) < 7 || len(s) > 40 {
-			add("`sourceCommitSha` must be a 7-40 char hex")
-		} else {
-			a.SourceCommitSha = s
+		if !ok {
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be a string", key)}
 		}
-	}
-	if v, ok := meta["captureMeta"]; ok {
+		return envelopeValue{set: true, str: s}, nil
+	case envelopeCaptureMeta:
 		m, ok := v.(map[string]any)
 		if !ok {
-			add("`captureMeta` must be an object {%s}", strings.Join(captureMetaKeys, ", "))
-			return results
+			return envelopeValue{}, []string{fmt.Sprintf("`%s` must be an object {%s}", key, strings.Join(captureMetaKeys, ", "))}
 		}
-		if cv, ok := m["classifier"]; ok {
-			if s, ok := cv.(string); ok {
-				a.CaptureMeta.Classifier = s
-			} else {
-				add("`captureMeta.classifier` must be a string")
+		var val envelopeValue
+		val.set = true
+		var msgs []string
+		for _, child := range captureMetaFields {
+			cv, ok := m[child.key]
+			if !ok {
+				continue
 			}
-		}
-		if dv, ok := m["dedupeKey"]; ok {
-			if s, ok := dv.(string); ok {
-				if !isHexString(s, 64) && s != "" {
-					add("`captureMeta.dedupeKey` must be a 64-char hex hash")
-				} else {
-					a.CaptureMeta.DedupeKey = s
-				}
-			} else {
-				add("`captureMeta.dedupeKey` must be a string")
-			}
-		}
-		// title is the normalized title text the dedupeKey was computed
-		// from (spec provenance-capture:1). Any string is accepted: the
-		// stored form is already normalized, and a title that disagrees
-		// with the key is a producer defect, not a structural violation —
-		// refusing it here would reject a draft the runtime can still
-		// dedupe by key.
-		if tv, ok := m["title"]; ok {
-			if s, ok := tv.(string); ok {
-				a.CaptureMeta.Title = s
-			} else {
-				add("`captureMeta.title` must be a string")
+			childVal, childMsgs := validateEnvelopeValue(child.kind, key+"."+child.key, cv)
+			msgs = append(msgs, childMsgs...)
+			if childVal.set {
+				child.record(&val.meta, childVal)
 			}
 		}
 		for k := range m {
 			if !contains(captureMetaKeys, k) {
-				add("unknown captureMeta field %q", k)
+				msgs = append(msgs, fmt.Sprintf("unknown captureMeta field %q", k))
 			}
 		}
+		return val, msgs
 	}
-	return results
+	return envelopeValue{}, nil
 }
 
 // isStringOrObject reports whether v is a content value of the allowed
@@ -764,31 +933,33 @@ func classifyMap(relPath, absPath string, fm map[string]any, requireInstanceVers
 		}
 	}
 
+	// created/updated are unit metadata (not envelope): the same date shape,
+	// produced by the same kind validator, so the wording cannot diverge from
+	// the freshness dates envelopeFields validates. The validity horizon
+	// (validUntil/lastConfirmed) is an envelope field and is read by
+	// classifyEnvelope with the rest of the envelope — a malformed value is R0
+	// there too, so a typo never degrades silently into "undeclared", and the
+	// values themselves are never checked against a clock.
 	for _, f := range []struct {
-		key   string
-		label string
-		dst   *string
+		key string
+		dst *string
 	}{
-		{"created", "`created`", &a.Created},
-		{"updated", "`updated`", &a.Updated},
-		// Freshness (validity horizon ADR): envelope metadata with the
-		// same structural contract as the other dates — a malformed
-		// value is R0, so a typo never degrades silently into
-		// "undeclared". The values themselves are never checked
-		// against a clock here.
-		{"validUntil", "`validUntil`", &a.ValidUntil},
-		{"lastConfirmed", "`lastConfirmed`", &a.LastConfirmed},
+		{"created", &a.Created},
+		{"updated", &a.Updated},
 	} {
-		if v, ok := fm[f.key]; ok {
-			s, ok := asDateString(v)
-			if !ok || !validDate(s) {
-				results = append(results, Result{
-					File: relPath, Rule: RuleStructural, Severity: SeverityError,
-					Message: fmt.Sprintf("%s must be a date in YYYY-MM-DD format", f.label),
-				})
-			} else {
-				*f.dst = s
-			}
+		v, ok := fm[f.key]
+		if !ok {
+			continue
+		}
+		val, msgs := validateEnvelopeValue(envelopeDate, f.key, v)
+		for _, msg := range msgs {
+			results = append(results, Result{
+				File: relPath, Rule: RuleStructural, Severity: SeverityError,
+				Message: msg,
+			})
+		}
+		if val.set {
+			*f.dst = val.str
 		}
 	}
 
