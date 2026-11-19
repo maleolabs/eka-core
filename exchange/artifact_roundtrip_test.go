@@ -11,12 +11,12 @@ import (
 // projects the freshness fields (validUntil, lastConfirmed) and the
 // ADR-035 provenance capture fields the unit carries.
 //
-// The artifact -> unit direction is NOT fixed here and is a known gap
-// (documented in the readiness report): builder.go toUnit still leaves
-// the provenance capture fields empty, and restoring them breaks
-// TestImportRoundTrip (the compiled content object does not carry them
-// back, so a non-human provenance would not survive export -> import ->
-// export byte-identically). That defect predates this change and needs
+// The artifact -> unit direction is NOT fixed here: builder.go toUnit now
+// projects provenance (guarded by provenance_test.go, which owns the
+// export -> import -> export contract), but the other capture fields
+// (sourcePromptHash, confidence, sourceCommitSha, captureMeta) are still
+// left empty on that direction, because the compiled content object does
+// not carry them back. That remaining defect predates this change and needs
 // its own ADR-035 decision.
 func TestToArtifactCarriesFreshnessAndProvenance(t *testing.T) {
 	u := &Unit{

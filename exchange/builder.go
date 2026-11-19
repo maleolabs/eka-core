@@ -351,6 +351,24 @@ func toUnit(la *loadedArtifact) *Unit {
 	if d, ok := conformance.DomainForToken(la.Type); ok {
 		classification.Domain = string(d)
 	}
+	// Provenance travels in the unit envelope (ADR-035 v3): during transport
+	// the exchange unit is authoritative for it, so a non-default value read
+	// from the artifact must not be dropped here — that would reset every
+	// inferred/reconciled unit to the human default on the way out and make
+	// export -> import -> export unreproducible.
+	//
+	// The human default is normalised to absence ("") instead of being
+	// spelled: the two adapters disagree on how they report the same
+	// undeclared claim — the Markdown adapter leaves Provenance empty while
+	// the JSON adapter fills in "human" — so carrying the spelling would make
+	// an export of a Markdown repository differ in bytes from the export of
+	// its own JSON-native re-import, for a distinction the artifact format
+	// cannot express. Absence therefore means "no declaration, i.e. human",
+	// and the field is only ever present for a real declaration.
+	provenance := la.Provenance
+	if provenance == conformance.ProvenanceHuman {
+		provenance = ""
+	}
 	u := &Unit{
 		Identity:              id,
 		CanonicalIdentityForm: id.CanonicalForm(),
@@ -363,6 +381,7 @@ func toUnit(la *loadedArtifact) *Unit {
 		StateVector:           stateVectorFrom(la.States),
 		Classification:        classification,
 		Phase:                 la.Phase,
+		Provenance:            provenance,
 		// The unit content is the compiled structured-json payload
 		// (spec-standard-v2 §3.3, §6); legacy structured-text payloads
 		// remain readable at import but are never emitted.

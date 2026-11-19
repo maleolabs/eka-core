@@ -176,9 +176,9 @@ func unitFilePath(u *Unit) (string, error) {
 // frontmatter is the deterministic YAML reconstruction of the unit
 // metadata. Field order is fixed (design decision 5): identity, revision,
 // owned state fields (declared domain order), classification, metadata,
-// relationship fields (declared order, only when non-empty), phase, change
-// log. yaml.v3 struct marshaling emits fields in declaration order — this
-// struct IS the serialization contract.
+// relationship fields (declared order, only when non-empty), phase,
+// provenance, change log. yaml.v3 struct marshaling emits fields in
+// declaration order — this struct IS the serialization contract.
 type frontmatter struct {
 	Namespace           string                     `yaml:"namespace"`
 	Type                string                     `yaml:"type"`
@@ -201,6 +201,7 @@ type frontmatter struct {
 	DependsOn           []string                   `yaml:"depends-on,omitempty"`
 	Validates           []string                   `yaml:"validates,omitempty"`
 	Phase               string                     `yaml:"phase,omitempty"`
+	Provenance          string                     `yaml:"provenance,omitempty"`
 	ChangeLog           []fmChangeLogEntry         `yaml:"change-log,omitempty"`
 }
 
@@ -214,11 +215,42 @@ type fmChangeLogEntry struct {
 	By     conformance.AuthorIdentity `yaml:"by"`
 }
 
+// artifactProvenance renders the provenance value to write into an
+// artifact's metadata, or "" when the artifact must not carry the field.
+//
+// The boundary is the absence contract: "human" is the default, so an
+// explicit `provenance: human` and an absent field are the same claim
+// (conformance.ValidProvenance, Unit.ToArtifact defaults "" to human) and
+// writing the default would make an imported artifact differ from its
+// source for no semantic gain. Only inferred/reconciled are declarations
+// that must survive; a value outside the enum is refused, because the
+// Markdown adapter reads no provenance at all, so an invalid value written
+// there would be lost without any finding.
+//
+// builder.go toUnit already normalises the default to absence, so the
+// "human" arm only fires for a package unit produced elsewhere (another
+// exporter, the runtime envelope) that spells the default out.
+func artifactProvenance(u *Unit) (string, error) {
+	switch u.Provenance {
+	case "", conformance.ProvenanceHuman:
+		return "", nil
+	case conformance.ProvenanceInferred, conformance.ProvenanceReconciled:
+		return u.Provenance, nil
+	}
+	return "", packageErrorf(
+		"import refused: unit %s declares provenance %q; the provenance enum is human|inferred|reconciled",
+		u.CanonicalIdentityForm, u.Provenance)
+}
+
 // buildFrontmatter renders the deterministic YAML metadata block (without
 // the surrounding "---" delimiters) of one accepted unit. Relationship
 // targets are converted from canonical identity forms to repository
 // reference forms (design decision 4).
 func buildFrontmatter(u *Unit) (string, error) {
+	prov, err := artifactProvenance(u)
+	if err != nil {
+		return "", err
+	}
 	fm := frontmatter{
 		Namespace:       u.Identity.Namespace,
 		Type:            u.Identity.Type,
@@ -229,6 +261,11 @@ func buildFrontmatter(u *Unit) (string, error) {
 		Created:         u.Created,
 		Updated:         u.Updated,
 		Phase:           u.Phase,
+		// Provenance is written only when the unit carries a non-default
+		// value: the human default is the absence contract, so an artifact
+		// that declared nothing (or declared "human") must not gain the
+		// field.
+		Provenance: prov,
 	}
 	if u.StateVector.ContentState != "" {
 		fm.ContentState = u.StateVector.ContentState
@@ -419,7 +456,12 @@ type jsonAuthoring struct {
 	Phase               string                     `json:"phase,omitempty"`
 	Relationships       map[string][]string        `json:"relationships,omitempty"`
 	ChangeLog           []jsonChangeLogEntry       `json:"changeLog,omitempty"`
-	Content             json.RawMessage            `json:"content"`
+	// Provenance is the top-level capture field the JSON adapter reads
+	// (conformance.analyzeJSON); omitting it for a unit that carries one
+	// would silently reset the unit to the human default on the next
+	// export. Empty stays omitted (absence is the human default).
+	Provenance string          `json:"provenance,omitempty"`
+	Content    json.RawMessage `json:"content"`
 }
 
 // jsonChangeLogEntry is one change-log entry in the §3.2 spelling:
@@ -439,6 +481,10 @@ type jsonChangeLogEntry struct {
 // artifact by construction (same folder mapping, same identity fields,
 // camelCase domains converted back by the JSON adapter).
 func buildJSONAuthoring(u *Unit) ([]byte, error) {
+	prov, err := artifactProvenance(u)
+	if err != nil {
+		return nil, err
+	}
 	doc := jsonAuthoring{
 		Namespace:       u.Identity.Namespace,
 		Type:            u.Identity.Type,
@@ -451,6 +497,7 @@ func buildJSONAuthoring(u *Unit) ([]byte, error) {
 		Dimension:       u.Classification.Dimension,
 		Domain:          u.Classification.Domain,
 		Phase:           u.Phase,
+		Provenance:      prov,
 		Content:         u.ContentPayload,
 	}
 	if len(u.Classification.DimensionsSecondary) > 0 {
