@@ -44,45 +44,111 @@ func TestSimilarityNormalization(t *testing.T) {
 	}
 }
 
-// TestSimilarityShortTitleEditsDedupe: the Levenshtein fallback does work, but
-// only for titles of two tokens or fewer — that is the condition in
-// Similarity, and short titles are where token Jaccard is unfairly harsh.
+// TestSimilarityShortTitleTyposDedupe: the character-level fallback's remaining
+// job. For titles of two tokens or fewer, one mistyped letter is a large
+// fraction of the title while token Jaccard only sees two different tokens, so
+// the typo path has to stay open. Plurals are no longer this fallback's
+// responsibility — stemming handles those — so what is pinned here is a genuine
+// misspelling, not a grammar variant.
 func TestSimilarityShortTitleEditsDedupe(t *testing.T) {
 	c := CaptureService{}
-	if !c.IsSimilar("add cache", "add caches") {
-		t.Errorf("two-token singular/plural scored %v, want >= 0.8",
-			c.Similarity("add cache", "add caches"))
-	}
-	if !c.IsSimilar("login", "logins") {
-		t.Errorf("single-token singular/plural scored %v, want >= 0.8",
-			c.Similarity("login", "logins"))
+	for _, p := range [][2]string{
+		{"fix login", "fix logn"},
+		{"dedupe", "dedup"},
+	} {
+		if got := c.Similarity(p[0], p[1]); !c.IsSimilar(p[0], p[1]) {
+			t.Errorf("Similarity(%q,%q) = %v, want >= 0.8: a typo in a short title is the same task", p[0], p[1], got)
+		}
 	}
 }
 
-// TestSimilarityLongTitleEditsDoNotDedupe pins a known gap, and is named so it
-// cannot be mistaken for approval of it.
-//
-// Similarity's own doc comment cites "fix login bug" vs "fix login bugs" as the
-// case the Levenshtein fallback rescues, but the fallback is gated on
-// `len(ta) <= 2 || len(tb) <= 2`, and that pair is three tokens. The result is
-// 0.5, well under the 0.8 threshold, so the pair the comment names does not
-// dedupe at all: capture creates a second draft for the same task.
-//
-// This is recorded rather than fixed here. Widening the fallback changes how
-// aggressively capture merges titles, which is a product decision about the
-// capture gateway, not a coverage concern — and silently merging more drafts is
-// its own failure mode. The finding is filed against the wave; whoever decides
-// the dedupe policy should change both the condition and this test.
-func TestSimilarityLongTitleEditsDoNotDedupe(t *testing.T) {
+// TestSimilarityPluralsDedupe: a singular/plural edit is the same task, so it
+// must dedupe at every title length. The three- and four-token cases are the
+// ones that matter: they are past the Levenshtein gate, so only the token
+// metric can save them. When it cannot, capture files a second draft for work
+// that is already tracked and the duplicate is invisible.
+func TestSimilarityPluralsDedupe(t *testing.T) {
 	c := CaptureService{}
-	got := c.Similarity("Fix login bug", "Fix login bugs")
-	if got != 0.5 {
-		t.Fatalf("Similarity = %v, want 0.5 — if this changed, the dedupe policy was "+
-			"decided deliberately; update this test and close the finding", got)
+	pairs := [][2]string{
+		{"login", "logins"},
+		{"add cache", "add caches"},
+		// cache+caches at three tokens has no fallback to lean on, and "cache"
+		// takes a plain "s": a stemmer that assumed every "-ches" is "-ch"+"es"
+		// answers "cach" and leaves these two titles apart. Same defect as the
+		// three-token "bug"/"bugs" case this metric was introduced for.
+		{"fix login cache", "fix login caches"},
+		// The other reading of the same suffix, where the "es" really is there.
+		{"watch the queue", "watches the queue"},
+		{"fix login bug", "fix login bugs"},
+		{"fix login bug redirect", "fix login bugs redirect"},
 	}
-	if c.IsSimilar("Fix login bug", "Fix login bugs") {
-		t.Fatal("three-token singular/plural now dedupes; the fallback condition changed " +
-			"without the dedupe policy decision this test exists to force")
+	for _, p := range pairs {
+		if got := c.Similarity(p[0], p[1]); !c.IsSimilar(p[0], p[1]) {
+			t.Errorf("Similarity(%q,%q) = %v, want >= 0.8: singular/plural is one task", p[0], p[1], got)
+		}
+	}
+}
+
+// TestSimilarityDifferingLongTitlesDoNotDedupe: the over-merge risk that the
+// fallback's length gate protects. These two titles share four of five tokens
+// and differ only in the qualifier. A metric that forgave that difference would
+// fold "fix login bug in auth" into "fix login bug in billing": two different
+// tasks, one draft, and the second one silently gone. If this ever dedupes,
+// stop and check how the gate or the threshold moved.
+func TestSimilarityDifferingLongTitlesDoNotDedupe(t *testing.T) {
+	c := CaptureService{}
+	a, b := "fix login bug in auth", "fix login bug in billing"
+	if got := c.Similarity(a, b); c.IsSimilar(a, b) {
+		t.Errorf("Similarity(%q,%q) = %v, want < 0.8: these are different tasks", a, b, got)
+	}
+}
+
+// TestSimilarityStemmingKeepsDistinctWordsApart: class/classes and
+// status/statuses are plural pairs, so they must collapse to one token — but
+// the form they collapse to must not swallow unrelated words. "classes" ->
+// "class" is right; "classes" -> "clas" would still dedupe the pair while also
+// colliding with anything that starts the same way, which is exactly how
+// over-stemming starts merging tasks that only share a prefix.
+func TestSimilarityStemmingKeepsDistinctWordsApart(t *testing.T) {
+	c := CaptureService{}
+	for _, p := range [][2]string{
+		{"class", "classes"},
+		{"status", "statuses"},
+		{"analysis", "analyses"},
+	} {
+		if got := c.Similarity(p[0], p[1]); !c.IsSimilar(p[0], p[1]) {
+			t.Errorf("Similarity(%q,%q) = %v, want >= 0.8: the plural pair must resolve to one token", p[0], p[1], got)
+		}
+	}
+	// Agreeing is not enough — the shared stem has to be a word. "statuses" and
+	// "status" both landing on "statu" would dedupe this pair and hand the
+	// metric a form nobody writes, which is a standing collision risk against
+	// anything that happens to normalise the same way. Pinned by value so a
+	// future rule cannot reintroduce it silently.
+	for _, want := range []struct{ token, stem string }{
+		{"status", "status"},
+		{"statuses", "status"},
+		{"class", "class"},
+		{"classes", "class"},
+		{"analysis", "analysis"},
+		{"analyses", "analysis"},
+	} {
+		if got := stems(want.token); len(got) != 1 || got[0] != want.stem {
+			t.Errorf("stems(%q) = %v, want exactly [%q]", want.token, got, want.stem)
+		}
+	}
+	// "caches" is the token that forced the two-reading design: cache+"s" and
+	// cach+"es" are both English, so neither reading may be dropped on a guess.
+	if got := stems("caches"); len(got) != 2 {
+		t.Errorf("stems(%q) = %v, want both readings", "caches", got)
+	}
+	for _, p := range [][2]string{
+		{"Fix class hierarchy", "Fix glass hierarchy"},
+		{"Check status endpoint", "Check stats endpoint"},
+	} {
+		if got := c.Similarity(p[0], p[1]); c.IsSimilar(p[0], p[1]) {
+			t.Errorf("Similarity(%q,%q) = %v, want < 0.8: shared structure is not a shared task", p[0], p[1], got)
+		}
 	}
 }
 

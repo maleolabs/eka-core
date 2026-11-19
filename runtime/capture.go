@@ -167,10 +167,19 @@ func (c CaptureService) Evaluate(prompt, title string, threshold float64) Captur
 }
 
 // Similarity returns the normalized title similarity in [0,1] for two raw
-// titles. It normalizes both via NormalizeTitle, then computes token-set
-// Jaccard similarity; when token sets are small it falls back to
-// character-level Jaccard. Deterministic, no external dependency. Threshold
-// for dedupe is 0.8 (sto:capture-gateway-core acceptance: similarity >=80%).
+// titles. It normalizes both via NormalizeTitle, reduces each token to the set
+// of its plausible plural-insensitive stems (stems), then computes token-set
+// Jaccard where a token matches when its stem sets intersect — which is why
+// "fix login bug" and "fix login bugs" score 1.0 without any character-level
+// help. Titles of two tokens or fewer additionally try a character-level
+// Levenshtein ratio and keep the larger score; that fallback is what absorbs a
+// real typo in a short title, and its length gate is what keeps long titles
+// sharing a prefix apart ("fix login bug in auth" vs "fix login bug in billing"
+// stays at 4/6 token overlap, no fallback, no dedupe). The tokens are unweighted
+// on purpose: there is no corpus of captured titles to derive IDF or any other
+// weight from, so a weight would be an invented parameter dressed up as a
+// metric. Deterministic, no external dependency. Threshold for dedupe is 0.8
+// (sto:capture-gateway-core acceptance: similarity >=80%).
 func (c CaptureService) Similarity(a, b string) float64 {
 	na := c.NormalizeTitle(a)
 	nb := c.NormalizeTitle(b)
@@ -180,30 +189,20 @@ func (c CaptureService) Similarity(a, b string) float64 {
 	if na == "" || nb == "" {
 		return 0
 	}
-	// Token Jaccard.
+	// Token Jaccard over stem sets.
 	ta := strings.Fields(na)
 	tb := strings.Fields(nb)
-	setA := make(map[string]bool, len(ta))
-	setB := make(map[string]bool, len(tb))
-	for _, t := range ta {
-		setA[t] = true
-	}
-	for _, t := range tb {
-		setB[t] = true
-	}
-	inter := 0
-	for k := range setA {
-		if setB[k] {
-			inter++
-		}
-	}
-	union := len(setA) + len(setB) - inter
+	ga := stemGroups(ta)
+	gb := stemGroups(tb)
+	inter := overlap(ga, gb)
+	union := len(ga) + len(gb) - inter
 	if union == 0 {
 		return 0
 	}
 	jaccard := float64(inter) / float64(union)
-	// For single-token titles, also consider Levenshtein ratio to avoid
-	// over-penalizing small edits (e.g. "fix login bug" vs "fix login bugs").
+	// For titles of two tokens or fewer, also consider the Levenshtein ratio:
+	// one mistyped letter is a large fraction of a short title, while token
+	// comparison sees two whole different tokens.
 	if len(ta) <= 2 || len(tb) <= 2 {
 		lev := levenshteinRatio(na, nb)
 		if lev > jaccard {
@@ -211,6 +210,99 @@ func (c CaptureService) Similarity(a, b string) float64 {
 		}
 	}
 	return jaccard
+}
+
+// stems returns the plausible plural-insensitive stems of a lowercased token,
+// usually exactly one. Only plural suffixes are stripped; verb suffixes are left
+// alone deliberately, because over-stemming costs more than the singular/plural
+// miss it would fix (a rule turning "planning" and "planned" into "plann" merges
+// them with each other and with "planner", i.e. it invents similarity the titles
+// do not have). Each token passes through one rule, once — no iteration, so no
+// rule can leave a token in a form no writer would produce.
+//
+// Three ambiguity guards, each of which exists because the naive rule re-created
+// the duplicate-draft bug one word class over:
+//
+//   - "-ches"/"-shes" is genuinely ambiguous in English: "watches" is watch+es,
+//     "caches" is cache+s. Both readings are returned and either may match.
+//     Picking one made "cache" and "caches" different tokens.
+//   - a trailing "s" after "u" or "i" is usually Latin singular, not a plural
+//     ("status", "virus", "bonus", "analysis"), so it is not stripped. Stripping
+//     it produced "statu": a form that matches nothing, which is how "status"
+//     and "statuses" stopped agreeing.
+//   - "-yses" maps to "-ysis" so "analyses" reaches "analysis" through the same
+//     single pass.
+//
+// "-ses" itself keeps one reading, so "cases" lands on "cas" and never agrees
+// with "case". Splitting that one open means deciding between case+s and
+// cas+es on every "-ses" token — "bases", "buses", "phases", "releases" — which
+// needs a dictionary, not a heuristic; the miss is left rather than guessed at.
+func stems(t string) []string {
+	switch {
+	case len(t) > 5 && strings.HasSuffix(t, "yses"):
+		return []string{t[:len(t)-4] + "ysis"}
+	case len(t) > 4 && strings.HasSuffix(t, "ies"):
+		return []string{t[:len(t)-3] + "y"}
+	case len(t) > 4 && (strings.HasSuffix(t, "ches") || strings.HasSuffix(t, "shes")):
+		return []string{t[:len(t)-2], t[:len(t)-1]}
+	case len(t) > 4 && (strings.HasSuffix(t, "ses") || strings.HasSuffix(t, "xes") ||
+		strings.HasSuffix(t, "zes")):
+		return []string{t[:len(t)-2]}
+	case len(t) > 3 && strings.HasSuffix(t, "s") && !strings.HasSuffix(t, "ss") &&
+		!strings.HasSuffix(t, "us") && !strings.HasSuffix(t, "is"):
+		return []string{t[:len(t)-1]}
+	}
+	return []string{t}
+}
+
+// stemGroups maps a title's tokens to their stem sets, dropping repeated
+// readings so a title cannot inflate its own overlap by repeating a word.
+func stemGroups(tokens []string) [][]string {
+	groups := make([][]string, 0, len(tokens))
+	seen := make(map[string]bool, len(tokens))
+	for _, t := range tokens {
+		s := stems(t)
+		key := strings.Join(s, "\x00")
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		groups = append(groups, s)
+	}
+	return groups
+}
+
+// overlap counts matched tokens between two stem-group lists: each token matches
+// at most once, and the result is the smaller of the two one-sided match counts
+// so a two-reading token cannot count twice or inflate the score. When every
+// stem set is a single form — every token that is not a "-ches"/"-shes" plural —
+// both counts agree and this is exactly the set intersection, so the score keeps
+// its meaning.
+func overlap(a, b [][]string) int {
+	count := func(x, y [][]string) (n int) {
+		for _, gx := range x {
+			for _, gy := range y {
+				if intersects(gx, gy) {
+					n++
+					break
+				}
+			}
+		}
+		return n
+	}
+	return min(count(a, b), count(b, a))
+}
+
+// intersects reports whether two stem sets share a reading.
+func intersects(a, b []string) bool {
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // IsSimilar reports whether two titles are similar enough to dedupe
