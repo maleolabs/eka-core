@@ -1,0 +1,4 @@
+version: 1
+project: eka-corpus-envelope-full
+name: envelope-full
+namespace: eka-corpus

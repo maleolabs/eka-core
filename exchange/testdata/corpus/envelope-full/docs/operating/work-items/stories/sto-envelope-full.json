@@ -1,0 +1,45 @@
+{
+  "namespace": "eka-corpus",
+  "type": "sto",
+  "id": "envelope-full",
+  "instanceVersion": 1,
+  "revision": 1,
+  "author": "Marij",
+  "created": "2026-11-18",
+  "updated": "2026-11-18",
+  "provenance": "inferred",
+  "sourcePromptHash": "b54613d38bb8fcbecce1bd9ef0c1ecb43e851f903ac950fde6ee108ff7d709fe",
+  "confidence": 0.0,
+  "sourceCommitSha": "9f2c1ab",
+  "captureMeta": {
+    "classifier": "keyword-heuristic v1",
+    "dedupeKey": "da338f5a1ea66da9d44db666c37a0266caf7fb356b7a2a9a7f442b72a253c851",
+    "title": "corpus envelope full"
+  },
+  "validUntil": "2027-06-30",
+  "lastConfirmed": "2026-11-18",
+  "state": {
+    "executionState": "todo",
+    "existenceState": "active"
+  },
+  "changeLog": [
+    {
+      "date": "2026-11-18",
+      "domain": "existenceState",
+      "from": "-",
+      "to": "active",
+      "by": "Marij"
+    },
+    {
+      "date": "2026-11-18",
+      "domain": "executionState",
+      "from": "-",
+      "to": "todo",
+      "by": "Marij"
+    }
+  ],
+  "content": {
+    "description": "Every envelope field is declared, including confidence 0.0.",
+    "acceptanceCriteria": "The declaration survives export, import and re-export."
+  }
+}

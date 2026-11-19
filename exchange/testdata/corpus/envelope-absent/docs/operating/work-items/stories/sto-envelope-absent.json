@@ -1,0 +1,34 @@
+{
+  "namespace": "eka-corpus",
+  "type": "sto",
+  "id": "envelope-absent",
+  "instanceVersion": 1,
+  "revision": 1,
+  "author": "Marij",
+  "created": "2026-11-18",
+  "updated": "2026-11-18",
+  "state": {
+    "executionState": "todo",
+    "existenceState": "active"
+  },
+  "changeLog": [
+    {
+      "date": "2026-11-18",
+      "domain": "existenceState",
+      "from": "-",
+      "to": "active",
+      "by": "Marij"
+    },
+    {
+      "date": "2026-11-18",
+      "domain": "executionState",
+      "from": "-",
+      "to": "todo",
+      "by": "Marij"
+    }
+  ],
+  "content": {
+    "description": "Declares no envelope field at all.",
+    "acceptanceCriteria": "The cycle invents none of them."
+  }
+}

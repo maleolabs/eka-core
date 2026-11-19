@@ -1,0 +1,52 @@
+{
+  "namespace": "eka-corpus",
+  "type": "cmt",
+  "id": "note-state",
+  "instanceVersion": 1,
+  "revision": 1,
+  "author": "Engineering Architecture",
+  "created": "2026-08-05",
+  "updated": "2026-08-05",
+  "state": {
+    "contentState": "draft",
+    "existenceState": "active",
+    "noteState": "resolved"
+  },
+  "changeLog": [
+    {
+      "date": "2026-08-05",
+      "domain": "contentState",
+      "from": "-",
+      "to": "draft",
+      "by": "Engineering Architecture"
+    },
+    {
+      "date": "2026-08-05",
+      "domain": "existenceState",
+      "from": "-",
+      "to": "active",
+      "by": "Engineering Architecture"
+    },
+    {
+      "date": "2026-08-05",
+      "domain": "noteState",
+      "from": "-",
+      "to": "open",
+      "by": "Engineering Architecture"
+    },
+    {
+      "date": "2026-08-05",
+      "domain": "noteState",
+      "from": "open",
+      "to": "resolved",
+      "by": "Engineering Architecture"
+    }
+  ],
+  "content": {
+    "role": "review",
+    "verdict": "approve",
+    "notes": [
+      "The note line carries its own state domain; review passed."
+    ]
+  }
+}
