@@ -802,6 +802,26 @@ func TestImportUnsupportedVersions(t *testing.T) {
 	}
 }
 
+// TestImportAcceptsEveryDeclaredSpecificationVersion: the accepted set is
+// the current version plus the legacy lines the standard shipped (1.3 shr
+// contract, 1.1, 1.0). Widening the set for a new version must never
+// silently drop an older line, and a 1.4 exporter must read every package
+// a 1.4-era importer accepts.
+func TestImportAcceptsEveryDeclaredSpecificationVersion(t *testing.T) {
+	for _, v := range []string{"1.3", "1.1", "1.0"} {
+		t.Run(v, func(t *testing.T) {
+			dir := assembleTestPackage(t, testPackageSpec{
+				units:           []*Unit{specUnit("ns-one", "001", 1, "approved", nil)},
+				headerOverrides: func(h *Header) { h.SpecificationVersion = v },
+			})
+			repo := newTestRepo(t)
+			if _, err := Import(dir, ImportOptions{Root: repo}); err != nil {
+				t.Fatalf("specification version %s must be accepted: %v", v, err)
+			}
+		})
+	}
+}
+
 // TestImportUnknownFieldRejected: a field unknown to a v1 implementer is
 // rejected (RSF §9.5 reject-by-default).
 func TestImportUnknownFieldRejected(t *testing.T) {

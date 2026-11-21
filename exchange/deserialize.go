@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -467,6 +468,17 @@ func plural(n int) string {
 
 // --- Exchange §11.1 phases 1-2 (package-side validation). ---
 
+// acceptedSpecificationVersions is the specification-version set this
+// importer accepts: the current version plus the legacy lines still
+// decodable (1.3 shr contract, 1.1, 1.0). Exports always declare the
+// current version.
+var acceptedSpecificationVersions = []string{
+	SpecificationVersion,
+	"1.3",
+	LegacySpecificationVersion,
+	"1.0",
+}
+
 // checkContract (phase 1) validates the declared versions against the
 // supported set, listing what was found versus what is supported. The
 // supported set: v2.0 (SerializationVersion), v1.1 and the pre-1.1 line
@@ -486,10 +498,11 @@ func checkContract(p *loadedPackage) error {
 			"import refused: unsupported exchange format version %q (found) — this importer supports %q (supported); the package cannot be interpreted safely",
 			h.ExchangeFormatVersion, ExchangeFormatVersion)
 	}
-	if h.SpecificationVersion != SpecificationVersion && h.SpecificationVersion != LegacySpecificationVersion && h.SpecificationVersion != "1.0" {
+	if !slices.Contains(acceptedSpecificationVersions, h.SpecificationVersion) {
 		return packageErrorf(
-			"import refused: unsupported specification version %q (found) — this importer validates against %q (supported; legacy %q and %q accepted); the taxonomy and state variants of the declared version cannot be applied",
-			h.SpecificationVersion, SpecificationVersion, LegacySpecificationVersion, "1.0")
+			"import refused: unsupported specification version %q (found) — this importer validates against %q (supported; legacy %s accepted); the taxonomy and state variants of the declared version cannot be applied",
+			h.SpecificationVersion, SpecificationVersion,
+			strings.Join(acceptedSpecificationVersions[1:], ", "))
 	}
 	if h.Exporter == "" {
 		return packageErrorf("import refused: the package header declares no exporter identity")

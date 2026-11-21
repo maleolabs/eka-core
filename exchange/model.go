@@ -43,8 +43,9 @@ import (
 const (
 	// SpecificationVersion is the version of the EKA Exchange
 	// Specification (and EKA standard) the exported knowledge conforms
-	// to: "1.3" (shr contract + Records/Operations IsKnowledge).
-	SpecificationVersion = "1.3"
+	// to: "1.4" (additive over 1.3: scope-aware container concurrency,
+	// validity horizon, provenance/capture envelope).
+	SpecificationVersion = "1.4"
 	// LegacySpecificationVersion is the previous standard version still
 	// accepted at import (standard-112-bump): packages exported against
 	// 1.1 remain readable; exports always declare the current version.
