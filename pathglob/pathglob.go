@@ -1,7 +1,9 @@
 // Package pathglob implements the EKA Standard 1.5 applicability-declaration
 // glob grammar (specification/exchange.md, "Content: applicability
 // declaration (optional)"): repository-relative, forward-slashed on every
-// platform, anchored at the repository root.
+// platform, anchored at the repository root. [InterpretChecks] extends the
+// same grammar to the Standard 1.7 declared-checks field, whose `scope` carries
+// the same patterns.
 //
 //   - matches within a single path segment (never crosses "/")
 //     ?   matches exactly one character (never "/")
@@ -76,6 +78,51 @@ func Interpret(v any) ([]Pattern, error) {
 			return nil, fmt.Errorf("pattern %q: %w", s, err)
 		}
 		out = append(out, p)
+	}
+	return out, nil
+}
+
+// Check is one parsed entry of a declared-checks declaration (Standard 1.7,
+// specification/exchange.md, "Content: declared checks (optional)"): a shell
+// command run at the repository root plus the repository-relative scope
+// patterns it is relevant to.
+type Check struct {
+	Command string
+	Scope   []Pattern
+}
+
+// InterpretChecks compiles the decoded value of a `checks` content field — a
+// JSON array of {"command": ..., "scope": [...]} objects — into checks. It is
+// the single source of truth for what makes a declared-check declaration
+// malformed: a value that is not an array, an element that is not an object, a
+// missing, non-string or empty `command`, a `scope` that is not an array, or a
+// scope pattern that cannot be compiled. An absent `scope` is an empty scope
+// (it matches no path). An absent field is never passed here (absence is not a
+// defect).
+func InterpretChecks(v any) ([]Check, error) {
+	items, ok := v.([]any)
+	if !ok {
+		return nil, errors.New("must be an array of check objects")
+	}
+	out := make([]Check, 0, len(items))
+	for i, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("element %d must be an object", i)
+		}
+		command, ok := obj["command"].(string)
+		if !ok || command == "" {
+			return nil, fmt.Errorf("element %d `command` must be a non-empty string", i)
+		}
+		var scope []Pattern
+		if raw, present := obj["scope"]; present {
+			var err error
+			scope, err = Interpret(raw)
+			if err != nil {
+				return nil, fmt.Errorf("element %d `scope` %v", i, err)
+			}
+		}
+		out = append(out, Check{Command: command, Scope: scope})
 	}
 	return out, nil
 }

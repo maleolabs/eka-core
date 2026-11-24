@@ -803,13 +803,13 @@ func TestImportUnsupportedVersions(t *testing.T) {
 }
 
 // TestImportAcceptsEveryDeclaredSpecificationVersion: the accepted set is
-// the current version plus the legacy lines the standard shipped (1.5
-// standard check gate, 1.4 validity horizon, 1.3 shr contract, 1.1, 1.0).
-// Widening the set for a new version must never silently drop an older
-// line, and a 1.6 exporter must read every package a 1.6-era importer
-// accepts.
+// the current version plus the legacy lines the standard shipped (1.6
+// declared checks, 1.5 applicability declaration, 1.4 validity horizon, 1.3
+// shr contract, 1.1, 1.0). Widening the set for a new version must never
+// silently drop an older line, and a 1.7 exporter must read every package a
+// 1.7-era importer accepts.
 func TestImportAcceptsEveryDeclaredSpecificationVersion(t *testing.T) {
-	for _, v := range []string{"1.5", "1.4", "1.3", "1.1", "1.0"} {
+	for _, v := range []string{"1.6", "1.5", "1.4", "1.3", "1.1", "1.0"} {
 		t.Run(v, func(t *testing.T) {
 			dir := assembleTestPackage(t, testPackageSpec{
 				units:           []*Unit{specUnit("ns-one", "001", 1, "approved", nil)},
