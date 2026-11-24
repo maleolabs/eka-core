@@ -118,6 +118,7 @@ func ValidateCKO(u CKOArtifact, opts ValidateCKOOptions) (*Report, error) {
 		e.rule11(art)
 		e.rule12(art)
 		e.checkAppliesTo(art) // R0: the Standard 1.5 applicability declaration shape.
+		e.checkChecks(art)    // R0: the Standard 1.7 declared-checks declaration shape.
 	}
 	// The graph pass (R13, ADR-019) at CKO level: the unit being
 	// published is a single-artifact set, so the work-item transition

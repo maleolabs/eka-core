@@ -107,6 +107,7 @@ func Validate(root string) (*Report, error) {
 		e.rule11(a)
 		e.rule12(a)
 		e.checkAppliesTo(a) // R0: the Standard 1.5 applicability declaration shape.
+		e.checkChecks(a)    // R0: the Standard 1.7 declared-checks declaration shape.
 	}
 	// The graph pass (R13, ADR-019): the first cross-file validation —
 	// the cmt- note contract, discusses resolution and the work-item

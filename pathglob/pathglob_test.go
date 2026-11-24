@@ -93,3 +93,37 @@ func TestInterpret(t *testing.T) {
 		}
 	}
 }
+
+// TestInterpretChecks covers the decoded-value shapes of a `checks` field: an
+// array of objects with a non-empty command and an optional scope compiles; a
+// non-array value, a non-object element, a missing/non-string/empty command and
+// a bad scope are errors.
+func TestInterpretChecks(t *testing.T) {
+	valid := []any{
+		map[string]any{"command": "make test", "scope": []any{"src/**"}},
+		map[string]any{"command": "make lint"},
+	}
+	got, err := InterpretChecks(valid)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("InterpretChecks(valid) = %v, %v", got, err)
+	}
+	if got[0].Command != "make test" || len(got[0].Scope) != 1 || got[0].Scope[0].String() != "src/**" {
+		t.Errorf("first check = %+v", got[0])
+	}
+	if len(got[1].Scope) != 0 {
+		t.Errorf("absent scope must be empty, got %v", got[1].Scope)
+	}
+	for _, bad := range []any{
+		"make test",
+		[]any{"make test"},
+		[]any{map[string]any{"scope": []any{"src/**"}}},
+		[]any{map[string]any{"command": 42}},
+		[]any{map[string]any{"command": ""}},
+		[]any{map[string]any{"command": "make test", "scope": "src/**"}},
+		[]any{map[string]any{"command": "make test", "scope": []any{"a**b"}}},
+	} {
+		if _, err := InterpretChecks(bad); err == nil {
+			t.Errorf("InterpretChecks(%v) must report a malformed declaration", bad)
+		}
+	}
+}
