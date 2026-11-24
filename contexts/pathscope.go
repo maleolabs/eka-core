@@ -68,6 +68,68 @@ func (e *Engine) UnitsForPath(projectID, sourceRepo, path string) ([]Entry, erro
 	return out, nil
 }
 
+// ScopeWarning names one declared pattern that matches none of the given
+// paths — the repository-level lint primitive of the Standard 1.5
+// applicability declaration ("a well-formed pattern that matches no path
+// in the repository is a warning": a scope may be declared ahead of the
+// code, so it is a warning, never an error).
+type ScopeWarning struct {
+	// CanonicalForm is the declaring unit's canonical identity form.
+	CanonicalForm string
+	// Pattern is the declared `appliesTo` pattern (raw source text).
+	Pattern string
+}
+
+// UnmatchedScopes returns, for the units of ONE repository (its
+// provenance pair), every declared `appliesTo` pattern that matches none
+// of files. files are repository-root-relative, forward-slash paths
+// supplied by the caller (the CLI passes `git ls-files` output); an empty
+// files warns every declared pattern — still a valid state, the scope is
+// simply declared ahead of the code.
+//
+// The scope is REPOSITORY-relative, exactly like UnitsForPath: a
+// project-wide scan would let a sibling repository's declaration spuriously
+// bind (or fail to bind) this repository's paths. A malformed declaration
+// is an error (consistent with UnitsForPath), so it is reported, never
+// silently ignored. Units with no `appliesTo`, or a payload that is not a
+// JSON object, contribute nothing. The result is ordered by
+// CanonicalForm, then Pattern.
+func (e *Engine) UnmatchedScopes(projectID, sourceRepo string, files []string) ([]ScopeWarning, error) {
+	units, err := e.rt.Knowledge.Units(projectID, sourceRepo)
+	if err != nil {
+		return nil, fmt.Errorf("contexts: %w", err)
+	}
+	out := []ScopeWarning{}
+	for _, u := range units {
+		patterns, declared, err := declaredScope(u)
+		if err != nil {
+			return nil, fmt.Errorf("contexts: %s: `appliesTo` %v", u.CanonicalIdentityForm, err)
+		}
+		if !declared {
+			continue
+		}
+		for _, p := range patterns {
+			matched := false
+			for _, f := range files {
+				if p.Match(f) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				out = append(out, ScopeWarning{CanonicalForm: u.CanonicalIdentityForm, Pattern: p.String()})
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].CanonicalForm != out[j].CanonicalForm {
+			return out[i].CanonicalForm < out[j].CanonicalForm
+		}
+		return out[i].Pattern < out[j].Pattern
+	})
+	return out, nil
+}
+
 // declaredScope reads one unit's optional `appliesTo` declaration from its
 // content payload (the canonical structured content object). It reports
 // declared=false when the unit carries no structured content object — a

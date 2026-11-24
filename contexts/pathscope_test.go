@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/runtime"
 )
 
 // This file tests the Standard 1.5 path-to-constraint retrieval door
@@ -161,5 +162,169 @@ func TestDeclaredScopeAbsentBindsNothing(t *testing.T) {
 				t.Fatalf("declared=%v patterns=%v, want false/nil", declared, patterns)
 			}
 		})
+	}
+}
+
+// This file's remaining tests exercise the Standard 1.5 repository-level
+// lint primitive (UnmatchedScopes).
+
+// seedScopeRepo seeds three declaring std- units across one repository:
+// std-a binds src/**; std-b declares docs/** (matching) and never/**
+// (not); std-c declares missing/** (not).
+func seedScopeRepo(t *testing.T) {
+	t.Helper()
+	seedContextRepo(t, func(repo string) {
+		writeRepoFile(t, repo, "docs/standards/std-a.json",
+			pathJSON(t, "std", "a", "standards", []string{"src/**"}))
+		writeRepoFile(t, repo, "docs/standards/std-b.json",
+			pathJSON(t, "std", "b", "standards", []string{"docs/**", "never/**"}))
+		writeRepoFile(t, repo, "docs/standards/std-c.json",
+			pathJSON(t, "std", "c", "standards", []string{"missing/**"}))
+	})
+}
+
+// TestUnmatchedScopesWarnsOnlyUnmatched: a matching pattern warns nothing;
+// a non-matching one warns exactly once; a unit with one matching and one
+// non-matching pattern warns exactly the non-matching one.
+func TestUnmatchedScopesWarnsOnlyUnmatched(t *testing.T) {
+	seedScopeRepo(t)
+	r := openRuntime(t)
+	got, err := New(r).UnmatchedScopes("eka-view-fixture", "eka-view-fixture",
+		[]string{"src/main.go", "docs/readme.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ScopeWarning{
+		{CanonicalForm: "eka-view-fixture/std:b:1", Pattern: "never/**"},
+		{CanonicalForm: "eka-view-fixture/std:c:1", Pattern: "missing/**"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("warnings = %+v, want %+v", got, want)
+	}
+}
+
+// TestUnmatchedScopesEmptyFilesWarnsAll: an empty file list (a valid
+// state — the scope is declared ahead of the code) warns every declared
+// pattern, in CanonicalForm-then-Pattern order.
+func TestUnmatchedScopesEmptyFilesWarnsAll(t *testing.T) {
+	seedScopeRepo(t)
+	r := openRuntime(t)
+	got, err := New(r).UnmatchedScopes("eka-view-fixture", "eka-view-fixture", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ScopeWarning{
+		{CanonicalForm: "eka-view-fixture/std:a:1", Pattern: "src/**"},
+		{CanonicalForm: "eka-view-fixture/std:b:1", Pattern: "docs/**"},
+		{CanonicalForm: "eka-view-fixture/std:b:1", Pattern: "never/**"},
+		{CanonicalForm: "eka-view-fixture/std:c:1", Pattern: "missing/**"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("warnings = %+v, want %+v", got, want)
+	}
+}
+
+// TestUnmatchedScopesNoDeclarationsIsEmpty: the base fixture declares no
+// `appliesTo` anywhere — an empty slice, no error.
+func TestUnmatchedScopesNoDeclarationsIsEmpty(t *testing.T) {
+	seedContextRepo(t, nil)
+	r := openRuntime(t)
+	got, err := New(r).UnmatchedScopes("eka-view-fixture", "eka-view-fixture", []string{"src/main.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("warnings = %+v, want empty", got)
+	}
+}
+
+// TestUnmatchedScopesIsRepositoryScoped: a sibling repository's
+// declaration is never surfaced (the provenance-pair scope).
+func TestUnmatchedScopesIsRepositoryScoped(t *testing.T) {
+	seedScopeRepo(t)
+	r := openRuntime(t)
+	got, err := New(r).UnmatchedScopes("eka-view-fixture", "some-other-repo", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("sibling-repo warnings = %+v, want empty (repository-scoped)", got)
+	}
+}
+
+// TestUnmatchedScopesMalformedIsError: a malformed declaration is an
+// error, never ignored.
+func TestUnmatchedScopesMalformedIsError(t *testing.T) {
+	seedMalformedScopeRepo(t)
+	r := openRuntime(t)
+	if _, err := New(r).UnmatchedScopes("eka-view-fixture", "eka-view-fixture", []string{"src/main.go"}); err == nil {
+		t.Fatal("malformed `appliesTo` must be an error")
+	}
+}
+
+// seedMalformedScopeRepo seeds one repository whose stored unit declares
+// a malformed `appliesTo` (an uninterpretable pattern). The docs
+// conformance gate rejects such a declaration (conformance/applicability.go),
+// so the unit reaches the store through a source-only snapshot — the one
+// seed path that does not re-run the gate.
+func seedMalformedScopeRepo(t *testing.T) {
+	t.Helper()
+	t.Setenv("EKA_HOME", t.TempDir())
+	repo := copyFixtureLocal(t, filepath.Join("..", "view", "testdata", "valid"))
+	writeSnapshotRepo(t, repo, []*exchange.Unit{{
+		Identity:              exchange.Identity{Namespace: "eka-view-fixture", Type: "std", ID: "bad", InstanceVersion: 1},
+		CanonicalIdentityForm: "eka-view-fixture/std:bad:1",
+		Revision:              1,
+		StateVector:           exchange.StateVector{ContentState: "draft"},
+		ChangeLog:             []exchange.ChangeLogEntry{},
+		Relationships:         []exchange.Relationship{},
+		Content:               exchange.ContentRef{Representation: exchange.StructuredJSON, File: "content"},
+		ContentPayload:        []byte(`{"purpose":"p","content":"c","appliesTo":["a**b"]}`),
+	}})
+	r, err := runtime.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, err := runtime.Authoring.Sync(r, repo, runtime.SyncOptions{Pull: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeSnapshotRepo emits a source-only snapshot of units into
+// <repo>/exchange/snapshots — the store seed used to bypass the docs
+// conformance gate.
+func writeSnapshotRepo(t *testing.T, repo string, units []*exchange.Unit) {
+	t.Helper()
+	pkg := &exchange.Package{
+		Header: exchange.Header{
+			SerializationVersion:  exchange.SerializationVersion,
+			ExchangeFormatVersion: exchange.ExchangeFormatVersion,
+			SpecificationVersion:  exchange.SpecificationVersion,
+			Exporter:              exchange.Exporter,
+			PackageIdentityLabel:  exchange.PackageIdentityLabel(exchange.ScopeRepository, "eka-view-fixture"),
+			ExportScope:           exchange.ScopeRepository,
+			Namespace:             "eka-view-fixture",
+		},
+		Units: units,
+		Declarations: exchange.Declarations{
+			Closure:            exchange.ClosureDeclaration{Scope: exchange.ScopeRepository, Seeds: []string{}},
+			ExternalReferences: []exchange.ExternalReference{},
+			Extensions:         []exchange.ExtensionDecl{},
+		},
+	}
+	files, _, err := exchange.EmitSource(pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(repo, "exchange", "snapshots")
+	for _, f := range files {
+		p := filepath.Join(dir, filepath.FromSlash(f.Name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, f.Data, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
