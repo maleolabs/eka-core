@@ -43,10 +43,10 @@ import (
 const (
 	// SpecificationVersion is the version of the EKA Exchange
 	// Specification (and EKA standard) the exported knowledge conforms
-	// to: "1.5" (additive over 1.4: the applicability declaration —
-	// appliesTo, a content field binding a constraint Artifact to the
-	// paths or modules it applies to).
-	SpecificationVersion = "1.5"
+	// to: "1.6" (additive over 1.5: the standard check gate — the
+	// distributed pre-commit/pre-push hook templates invoke
+	// `eka verify --changed`, non-blocking by default).
+	SpecificationVersion = "1.6"
 	// LegacySpecificationVersion is the previous standard version still
 	// accepted at import (standard-112-bump): packages exported against
 	// 1.1 remain readable; exports always declare the current version.
