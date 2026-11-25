@@ -43,8 +43,13 @@ import (
 const (
 	// SpecificationVersion is the version of the EKA Exchange
 	// Specification (and EKA standard) the exported knowledge conforms
-	// to: "1.0".
-	SpecificationVersion = "1.0"
+	// to: "1.7" (additive over 1.6: the declared-checks content field —
+	// a constraint Artifact declares the checks that verify it).
+	SpecificationVersion = "1.7"
+	// LegacySpecificationVersion is the previous standard version still
+	// accepted at import (standard-112-bump): packages exported against
+	// 1.1 remain readable; exports always declare the current version.
+	LegacySpecificationVersion = "1.1"
 	// ExchangeFormatVersion is the version of the Exchange Contract the
 	// package is written against: "1".
 	ExchangeFormatVersion = "1"
@@ -248,6 +253,28 @@ type Unit struct {
 	// Phase is the context attribute on planning/scope artifacts
 	// (Exchange §8.4); outside the State Vector, never a State Domain.
 	Phase string `json:"phase,omitempty"`
+	// Provenance capture fields (ADR-035 v3 + spec provenance-capture:1).
+	// Provenance is human|inferred|reconciled (human default), carried
+	// in the unit envelope (non-breaking, omitempty keeps old payloads
+	// valid) and mirrored from draft top-level fields.
+	Provenance       string  `json:"provenance,omitempty"`
+	SourcePromptHash string  `json:"sourcePromptHash,omitempty"`
+	Confidence       float64 `json:"confidence,omitempty"`
+	// HasConfidence records that the source DECLARED a confidence, so the
+	// envelope can tell "declared 0.0" (a claim) from "not declared"
+	// (absence). Confidence alone cannot: 0 is both the zero value and a
+	// legal claim, and omitempty would drop the claim from unit.json.
+	HasConfidence   bool        `json:"hasConfidence,omitempty"`
+	SourceCommitSha string      `json:"sourceCommitSha,omitempty"`
+	CaptureMeta     CaptureMeta `json:"captureMeta,omitempty"`
+	// Freshness (validity horizon ADR): the declared validity horizon
+	// and the last human confirmation, both absolute YYYY-MM-DD dates,
+	// "" when undeclared. Additive envelope metadata: omitempty keeps
+	// every unit without them byte-identical, so stored payloads stay
+	// valid without a migration. lastConfirmed is not `updated` (the
+	// file modification time).
+	ValidUntil    string `json:"validUntil,omitempty"`
+	LastConfirmed string `json:"lastConfirmed,omitempty"`
 	// Content references the representation-tagged payload (RSF §6).
 	Content ContentRef `json:"content"`
 
@@ -338,6 +365,16 @@ type Classification struct {
 	// export, validated on import when present, and optional: packages
 	// without the field derive the domain from the type token.
 	Domain string `json:"domain,omitempty"`
+}
+
+// CaptureMeta holds the classifier/dedupe metadata (ADR-035 v3,
+// spec provenance-capture:1). Title is the normalized title text the
+// dedupeKey was computed from; it travels with the key because the key is
+// a one-way hash and cannot be compared back against a title.
+type CaptureMeta struct {
+	Classifier string `json:"classifier,omitempty"`
+	DedupeKey  string `json:"dedupeKey,omitempty"`
+	Title      string `json:"title,omitempty"`
 }
 
 // ContentRef is the representation-tagged payload reference (RSF §6.1):

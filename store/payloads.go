@@ -48,12 +48,55 @@ func (s *Store) PutUnit(unitJSON, content []byte, r Ref) (string, bool, error) {
 		}
 		defer tx.Rollback()
 
-		hash, keptNewer, err = putUnitTx(tx, unitJSON, content, r)
+		hash, keptNewer, err = putUnitTx(tx, unitJSON, content, r, false)
 		if err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("store: cannot commit put of %s: %w", hash, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return hash, keptNewer, nil
+}
+
+// RepointUnit stores one immutable unit payload and MOVES the line's
+// reference to it — the explicit same-version mutable-reference update
+// of the relate no-churn mechanism (relate and the assignment commands
+// re-point the reference to a new payload with the SAME instance
+// version and revision; the payload archive gains one row — history is
+// accumulation — but the artifact line does not advance). It differs
+// from PutUnit only in the forward-only guard: a payload that already
+// sits in the line's history at the SAME instance version re-points
+// the reference — same-version payloads are current-state candidates,
+// never history (re-adding an assigned-to edge that an unassign
+// removed recreates the earlier same-version payload, and the
+// reference must move to it). A payload of an OLDER instance version
+// is still refused (the line never regresses). PutUnit keeps the
+// stricter ancestor guard for the sync/import re-seed paths, where
+// re-pointing to a same-version ancestor would clobber a
+// workspace-native write (e.g. a pull re-seeding the pre-assignment
+// payload over an assignment made at the same instance version).
+// The whole transaction is retried on SQLITE_BUSY.
+func (s *Store) RepointUnit(unitJSON, content []byte, r Ref) (string, bool, error) {
+	var hash string
+	var keptNewer bool
+	err := retryBusy(func() error {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return fmt.Errorf("store: cannot begin repoint: %w", err)
+		}
+		defer tx.Rollback()
+
+		hash, keptNewer, err = putUnitTx(tx, unitJSON, content, r, true)
+		if err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("store: cannot commit repoint of %s: %w", hash, err)
 		}
 		return nil
 	})
@@ -93,7 +136,7 @@ func (s *Store) PutUnits(puts []Put) ([]string, error) {
 
 		hashes = make([]string, 0, len(puts))
 		for _, p := range puts {
-			hash, _, err := putUnitTx(tx, p.UnitJSON, p.Content, p.Ref)
+			hash, _, err := putUnitTx(tx, p.UnitJSON, p.Content, p.Ref, false)
 			if err != nil {
 				return err
 			}
@@ -137,7 +180,16 @@ func (s *Store) PutUnits(puts []Put) ([]string, error) {
 //
 // putUnitTx returns the stored hash and the keptNewer flag. It never
 // updates an existing payload row.
-func putUnitTx(tx *sql.Tx, unitJSON, content []byte, r Ref) (string, bool, error) {
+// putUnitTx performs one unit put: the immutable payload insert (with
+// the prev_hash lineage from the reference's current payload) and the
+// reference upsert, in one transaction. repoint selects the forward-only
+// guard semantics: false (PutUnit) keeps the strict ancestor guard —
+// a payload already in the referenced line's history never re-points
+// the reference (the sync/import re-seed protection); true
+// (RepointUnit, the relate no-churn mechanism) allows a same-version
+// re-point — the guard then blocks only a regression to an OLDER
+// instance version.
+func putUnitTx(tx *sql.Tx, unitJSON, content []byte, r Ref, repoint bool) (string, bool, error) {
 	hash := hashUnit(unitJSON, content)
 
 	// Look up the reference's current payload hash BEFORE the insert:
@@ -145,7 +197,8 @@ func putUnitTx(tx *sql.Tx, unitJSON, content []byte, r Ref) (string, bool, error
 	// the forward-only guard's ancestry walk.
 	prevHash := ""
 	var current string
-	err := tx.QueryRow(`SELECT object_hash FROM object_refs WHERE form = ?`, r.Form).Scan(&current)
+	currentVersion := 0
+	err := tx.QueryRow(`SELECT object_hash, instance_version FROM object_refs WHERE form = ?`, r.Form).Scan(&current, &currentVersion)
 	switch {
 	case err == nil:
 		prevHash = current
@@ -168,16 +221,24 @@ func putUnitTx(tx *sql.Tx, unitJSON, content []byte, r Ref) (string, bool, error
 	// backward along its own lineage. The payload above was archived
 	// (older instances are history); the reference stays where it is
 	// when the put is an idempotent re-put (same hash) or a re-seed of
-	// an ancestor payload (an older instance of the line).
+	// an ancestor payload (an older instance of the line). The repoint
+	// path (relate/assignment no-churn) narrows the guard to instance
+	// versions: a same-version ancestor is the line's CURRENT STATE and
+	// re-points; an older-version payload still refuses.
 	if prevHash != "" {
 		if hash == current {
 			// Identical payload: the reference already points at it —
 			// an idempotent re-put; nothing moves.
 			return hash, false, nil
 		}
-		if isAncestor(tx, hash, current) {
+		if !repoint && isAncestor(tx, hash, current) {
 			// The payload is already in the referenced line's history:
 			// re-pointing would regress the line to an older instance.
+			return hash, true, nil
+		}
+		if repoint && r.InstanceVersion < currentVersion {
+			// A regression to an OLDER instance version is refused on
+			// the repoint path too — the line never moves backward.
 			return hash, true, nil
 		}
 	}

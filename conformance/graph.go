@@ -19,7 +19,14 @@ import (
 //	- the work-item transition gates (ADR-019 D6): a work item at
 //	  in-review requires at least one child note with role
 //	  "implementation" and note-state "resolved"; a work item at done
-//	  requires EVERY child note resolved (no open notes).
+//	  requires EVERY child note resolved (no open notes);
+//	- the conditional assigned-to sub-check (ADR-029, rule-014.md):
+//	  a work item at in-review/done that carries an assigned-to
+//	  relationship must point at at most one member (mbr-) line of the
+//	  same repository — a target of any other type, an unresolvable
+//	  target, a cross-repository target or more than one target is not
+//	  conformant. Work items without the relationship produce no
+//	  findings (legacy data untouched).
 //
 // Findings are R13 errors in deterministic order (sorted by the finding's
 // file — the artifact's canonical form — then message). A note whose
@@ -175,7 +182,57 @@ func (g *graphPass) run() {
 			continue
 		}
 		g.results = append(g.results, g.gateFindings(a, state)...)
+		g.results = append(g.results, g.assignedToFindings(a)...)
 	}
+}
+
+// assignedToFindings evaluates the conditional assigned-to sub-check of
+// the R13 gate (ADR-029, rule-014.md). It binds ONLY work items that
+// carry an assigned-to relationship: the target must resolve to a member
+// (mbr-) line, at most one target is allowed (single-assignee), and the
+// target must originate from the same repository as the referring work
+// item (repository-level provenance; cross-repository assignment is
+// refused). A work item without the relationship produces no findings —
+// legacy data is untouched. Malformed references are reported by R5.
+func (g *graphPass) assignedToFindings(a *Artifact) []Result {
+	raws := a.Relations["assigned-to"]
+	if len(raws) == 0 {
+		return nil
+	}
+	var findings []Result
+	for _, raw := range raws {
+		ref, err := parseReference(raw, a.Namespace, a.Type)
+		if err != nil {
+			continue // R5 reports the malformed reference.
+		}
+		if ref.Type != "mbr" {
+			findings = append(findings, Result{
+				File: a.RelPath, Rule: Rule13, Severity: SeverityError,
+				Message: fmt.Sprintf("assigned-to target %q is not a member (mbr-) line; assignment points to one member", raw),
+			})
+			continue
+		}
+		if !g.resolved(ref) {
+			findings = append(findings, Result{
+				File: a.RelPath, Rule: Rule13, Severity: SeverityError,
+				Message: fmt.Sprintf("assigned-to target %q does not resolve", raw),
+			})
+			continue
+		}
+		if ref.Namespace != a.Namespace {
+			findings = append(findings, Result{
+				File: a.RelPath, Rule: Rule13, Severity: SeverityError,
+				Message: fmt.Sprintf("assigned-to target %q originates outside the work item's repository (%s); cross-repository assignment is refused", raw, a.Namespace),
+			})
+		}
+	}
+	if len(raws) > 1 {
+		findings = append(findings, Result{
+			File: a.RelPath, Rule: Rule13, Severity: SeverityError,
+			Message: fmt.Sprintf("assigned-to allows exactly one member target (got %d targets)", len(raws)),
+		})
+	}
+	return findings
 }
 
 // gateFindings evaluates the D6 gates for one work item at the given

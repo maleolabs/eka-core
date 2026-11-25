@@ -1,0 +1,30 @@
+# Per-package coverage floors for eka-core (read by scripts/coverage-gate.sh).
+#
+# A single module-wide number hides exactly the thing worth knowing: the
+# package with the widest blast radius being the least tested. These floors
+# exist so a regression in one package is visible instead of averaged away by
+# the thirteen that are healthy.
+#
+# Each floor is set a little below the measured value so ordinary refactoring
+# does not break the build, but a real drop does. Raising a floor when coverage
+# improves is encouraged; lowering one is a deliberate decision, not a cleanup.
+#
+# Format: <package> <minimum-percent>
+#
+# The packages with the highest blast radius — metadata (every eka.yaml read),
+# runtime (every lifecycle transition), store (the canonical store) — are the
+# reason this file exists at all.
+metadata             92
+runtime              63
+store                77
+conformance          72
+contexts             78
+exchange             79
+sync                 74
+workspace            72
+codegraph            66
+compile              81
+plugin               88
+view                 86
+machine              90
+pathglob             90

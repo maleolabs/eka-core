@@ -53,7 +53,7 @@ type PlanningProjection struct {
 	// one or two artifacts.
 	Traceability []DomainArtifact
 	// PlansByState counts plans per planning-state in the fixed value
-	// order draft, approved, immutable.
+	// order draft, approved, immutable, superseded.
 	PlansByState []StateCount
 }
 

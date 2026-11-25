@@ -84,6 +84,12 @@ type Draft struct {
 	// metadata for `eka draft list`; the draft file itself carries no
 	// timestamps (deterministic template).
 	Updated string
+	// Provenance capture fields (ADR-035 v3) surfaced for filtering/tagging.
+	Provenance       string
+	SourcePromptHash string
+	Confidence       float64
+	HasConfidence    bool
+	CaptureMeta      CaptureMeta
 }
 
 // NewDraftRequest describes one draft to scaffold.
@@ -118,6 +124,26 @@ type NewDraftRequest struct {
 	// only; raw text is rejected). "" scaffolds the type's required
 	// content keys as empty placeholders.
 	ContentFile string
+	// Provenance capture fields (ADR-035 v3). Empty = human (default).
+	Provenance       string
+	SourcePromptHash string
+	Confidence       float64
+	HasConfidence    bool
+	SourceCommitSha  string
+	CaptureMeta      CaptureMeta
+}
+
+// CaptureMeta mirrors conformance.CaptureMeta for draft authoring.
+//
+// Title is the title the DedupeKey was computed from. The draft writer
+// stores it normalized (Capture.NormalizeTitle), so the stored text is the
+// key's preimage and dedupe can compare titles instead of the draft
+// identifier — a slug the capture did not choose and that need not resemble
+// the title.
+type CaptureMeta struct {
+	Classifier string `json:"classifier,omitempty"`
+	DedupeKey  string `json:"dedupeKey,omitempty"`
+	Title      string `json:"title,omitempty"`
 }
 
 // PublishOptions configures one publish run. Documented deviation from
@@ -224,6 +250,72 @@ func parseDraftTarget(target string) (conformance.Reference, error) {
 	return ref, nil
 }
 
+// draftExists reports whether a draft of the given identity and
+// namespace exists in the project's drafts directory — the "is a
+// draft" test of the draft-target tolerance: the v2.0 JSON draft file
+// <workspace>/drafts/<project>/<type>-<id>.json (or the legacy .md
+// form) whose frontmatter namespace equals ns. The namespace
+// verification keeps the tolerance same-namespace-only: a
+// cross-namespace reference is never tolerated, even when a same-named
+// draft file exists under the project. project "" scans every
+// project's drafts (the resolveDraftFile cross-project fallback
+// semantics: a draft visible in `eka draft list` is a draft).
+func draftExists(ws *workspace.Workspace, project, ns, typeToken, id string) bool {
+	if project != "" {
+		return draftExistsIn(draftsRoot(ws), project, ns, typeToken, id)
+	}
+	entries, err := os.ReadDir(draftsRoot(ws))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() && draftExistsIn(draftsRoot(ws), e.Name(), ns, typeToken, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// draftExistsIn checks one project's drafts directory: the draft file
+// (v2.0 JSON, or the legacy .md form that stays addressable) whose
+// frontmatter namespace equals ns. A file that fails the structural
+// classification cannot verify the namespace and counts as absent
+// (conservative: the reference keeps flagging).
+func draftExistsIn(root, project, ns, typeToken, id string) bool {
+	dir := filepath.Join(root, project)
+	for _, name := range []string{typeToken + "-" + id + ".json", typeToken + "-" + id + ".md"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		// The frontmatter namespace decides (file names carry no
+		// namespace): a draft whose namespace differs from the
+		// reference's is not the referenced line.
+		a, err := conformance.ScanFile(path)
+		if err == nil && a != nil && a.Namespace == ns {
+			return true
+		}
+	}
+	return false
+}
+
+// draftTargetOf returns the CKO draft-target callback for one project
+// ("" = every project): Rule 5's draft target tolerance — a reference
+// to a line whose only existence is a draft of the project, with the
+// SAME namespace, is an allowed draft-to-draft authoring reference, so
+// the validator emits no finding for it. Cross-namespace references
+// are never tolerated (a same-named draft file under another namespace
+// is not the referenced line). The versioned-reference guard lives in
+// the rule engine (drafts never carry instance versions).
+func draftTargetOf(ws *workspace.Workspace, project string) func(ref conformance.Reference) bool {
+	return func(ref conformance.Reference) bool {
+		if ref.Namespace == "" {
+			return false
+		}
+		return draftExists(ws, project, ref.Namespace, ref.Type, ref.ID)
+	}
+}
+
 // cwdProjectOf resolves the project owning the repository registered
 // at the current working directory ("" when the cwd is not inside a
 // registered repository — the caller then falls back to scanning every
@@ -327,7 +419,8 @@ func resolveDraftFile(ws *workspace.Workspace, rt *Runtime, projectHint, typeTok
 // NewDraft scaffolds one draft: the deterministic JSON authoring
 // template (namespace, type, id, revision 1, the type's owned state
 // fields with their initial values, optional dimension/phase/relationship
-// fields, the change-log with one "-" -> initial entry per owned domain,
+// fields, the change-log with one "-" -> initial entry per owned domain
+// plus the phase context when given,
 // plus the type's required content keys as empty placeholders — or the
 // ContentFile JSON object merged into the content). The template is
 // byte-deterministic for identical inputs within a day (the change-log
@@ -339,8 +432,18 @@ func (AuthoringService) NewDraft(rt *Runtime, req NewDraftRequest) (*Draft, erro
 	if err != nil {
 		return nil, err
 	}
+	return newDraftFile(ws, req, nil)
+}
+
+// newDraftFile scaffolds ONE draft file into the workspace drafts tree —
+// the shared implementation of NewDraft and the batch scaffold
+// (NewDraftBatch): it validates the request, renders the deterministic
+// template (with extraContent merged over the type's required-section
+// placeholders — the inline counterpart of NewDraftRequest.ContentFile)
+// and writes the file with the atomic O_CREATE|O_EXCL collision guard.
+func newDraftFile(ws *workspace.Workspace, req NewDraftRequest, extraContent map[string]any) (*Draft, error) {
 	if _, ok := conformance.DomainForToken(req.Type); !ok {
-		return nil, fmt.Errorf("authoring: unknown artifact type %q; expected one of the 27 EKA type tokens", req.Type)
+		return nil, fmt.Errorf("authoring: unknown artifact type %q; expected one of the %d EKA type tokens", req.Type, conformance.TypeTokenCount())
 	}
 	if req.ID == "" {
 		return nil, fmt.Errorf("authoring: draft id must be a non-empty string")
@@ -370,7 +473,7 @@ func (AuthoringService) NewDraft(rt *Runtime, req NewDraftRequest) (*Draft, erro
 	}
 	path := draftPath(ws, req.Project, req.Type, req.ID)
 
-	body, err := draftJSON(req)
+	body, err := draftJSON(req, extraContent)
 	if err != nil {
 		return nil, fmt.Errorf("authoring: cannot render draft %s: %w", req.Type+":"+req.ID, err)
 	}
@@ -442,9 +545,13 @@ func draftDefaultState(typeToken, domain string) string {
 // draftDoc is the deterministic §3.2 authoring document of one
 // scaffolded draft: identity + revision 1, the owned-state defaults,
 // optional dimension/phase/relationship fields, the change-log with one
-// "-" -> initial entry per owned domain, and the required content keys
+// "-" -> initial entry per owned domain (plus the phase context when
+// given), and the required content keys
 // (empty placeholders). Field order is the schema's canonical order
 // (spec-standard-v2 §3.2).
+//
+// Provenance fields (ADR-035 v3) are appended after the core identity
+// fields; provenance defaults to human when absent.
 type draftDoc struct {
 	Namespace string            `json:"namespace"`
 	Type      string            `json:"type"`
@@ -458,10 +565,19 @@ type draftDoc struct {
 	Phase     string                      `json:"phase,omitempty"`
 	// Domain is the declared Engineering Domain (canonical spelling,
 	// e.g. "Architecture"); absent = derived from the type token.
-	Domain        string              `json:"domain,omitempty"`
-	Relationships map[string][]string `json:"relationships,omitempty"`
-	ChangeLog     []draftChangeLog    `json:"changeLog,omitempty"`
-	Content       map[string]any      `json:"content"`
+	Domain           string              `json:"domain,omitempty"`
+	Relationships    map[string][]string `json:"relationships,omitempty"`
+	ChangeLog        []draftChangeLog    `json:"changeLog,omitempty"`
+	Provenance       string              `json:"provenance,omitempty"`
+	SourcePromptHash string              `json:"sourcePromptHash,omitempty"`
+	Confidence       *float64            `json:"confidence,omitempty"`
+	SourceCommitSha  string              `json:"sourceCommitSha,omitempty"`
+	CaptureMeta      *CaptureMeta        `json:"captureMeta,omitempty"`
+	// ValidUntil is scaffolded visible and EMPTY: an empty value is the
+	// undeclared state, not a default horizon (a default would be a
+	// claim the model cannot make).
+	ValidUntil string         `json:"validUntil,omitempty"`
+	Content    map[string]any `json:"content"`
 }
 
 // draftChangeLog is one change-log entry in the §3.2 spelling: domain
@@ -479,9 +595,10 @@ type draftChangeLog struct {
 // the type's required section keys as empty placeholders (with the
 // projection header as the tkt- template's commands value — rule 8
 // requires it, so a scaffolded draft must be publishable without
-// edits), merged with the ContentFile JSON object when given (the
-// object's keys overwrite/add; raw text files are rejected).
-func draftJSON(req NewDraftRequest) ([]byte, error) {
+// edits), merged with the ContentFile JSON object when given and then
+// with extraContent (the batch scaffold's inline content — its keys
+// overwrite/add; raw text is rejected for JSON drafts).
+func draftJSON(req NewDraftRequest, extraContent map[string]any) ([]byte, error) {
 	doc := draftDoc{
 		Namespace: req.Namespace,
 		Type:      req.Type,
@@ -527,7 +644,13 @@ func draftJSON(req NewDraftRequest) ([]byte, error) {
 		}
 		doc.Relationships[conformance.StateKeyCamel(field)] = targets
 	}
-	if len(owned) > 0 {
+	// The change-log covers every owned domain plus, when the draft
+	// carries a phase, the phase context (rule 7 requires a change-log
+	// entry for every field with a change-log domain — a scaffolded
+	// draft must be publishable without edits, so the phase entry is
+	// scaffolded alongside the field: "-" -> the given value, by the
+	// author, same date as the state entries).
+	if len(owned) > 0 || req.Phase != "" {
 		today := time.Now().Format("2006-01-02")
 		by := req.By
 		if by.Name == "" {
@@ -542,10 +665,54 @@ func draftJSON(req NewDraftRequest) ([]byte, error) {
 				By:     by,
 			})
 		}
+		if req.Phase != "" {
+			doc.ChangeLog = append(doc.ChangeLog, draftChangeLog{
+				Date:   today,
+				Domain: conformance.DomainPhase,
+				From:   "-",
+				To:     req.Phase,
+				By:     by,
+			})
+		}
 	}
 	if req.By.Name != "" {
 		doc.Author = &req.By
 	}
+	// Provenance: default human; inferred/reconciled carry hashes and meta.
+	prov := req.Provenance
+	if prov == "" {
+		prov = conformance.ProvenanceHuman
+	}
+	// Only emit provenance when non-default or explicit to keep drafts minimal?
+	// Spec says field wajib ada di draft (default human), so always emit.
+	doc.Provenance = prov
+	if req.SourcePromptHash != "" {
+		doc.SourcePromptHash = req.SourcePromptHash
+	}
+	if req.HasConfidence {
+		v := req.Confidence
+		doc.Confidence = &v
+	}
+	if req.SourceCommitSha != "" {
+		doc.SourceCommitSha = req.SourceCommitSha
+	}
+	if req.CaptureMeta.Classifier != "" || req.CaptureMeta.DedupeKey != "" || req.CaptureMeta.Title != "" {
+		doc.CaptureMeta = &CaptureMeta{
+			Classifier: req.CaptureMeta.Classifier,
+			DedupeKey:  req.CaptureMeta.DedupeKey,
+			// Stored normalized — the same text DedupeKey hashes
+			// (sha256 of the normalized title). Normalizing here rather
+			// than trusting the caller is what keeps the recorded title
+			// and the key from disagreeing when the caller hands over the
+			// raw title; NormalizeTitle is idempotent, so an
+			// already-normalized title is unchanged.
+			Title: Capture.NormalizeTitle(req.CaptureMeta.Title),
+		}
+	}
+	// Freshness (validity horizon ADR): the key is always scaffolded so
+	// the horizon is visible at authoring time, and always left empty —
+	// empty is undeclared, and a default horizon would be a guess.
+	doc.ValidUntil = ""
 	// Content: required section keys as empty placeholders; the tkt-
 	// template's commands value carries the exact projection header
 	// line (rule 8).
@@ -571,6 +738,12 @@ func draftJSON(req NewDraftRequest) ([]byte, error) {
 		for k, v := range merge {
 			doc.Content[k] = v
 		}
+	}
+	// Inline batch content (extraContent) merges over everything: the
+	// batch target's content is the per-target authoring input, so it
+	// wins over any file merge (the batch path never sets ContentFile).
+	for k, v := range extraContent {
+		doc.Content[k] = v
 	}
 	out, err := json.Marshal(&doc)
 	if err != nil {
@@ -721,6 +894,10 @@ func (AuthoringService) Publish(rt *Runtime, target string, opts PublishOptions)
 	resolver := newStoreResolver(st)
 	report, err := conformance.ValidateCKO(u, conformance.ValidateCKOOptions{
 		Resolve: resolver.Resolve,
+		// Draft target tolerance: a reference whose target exists
+		// only as a draft of this project is an allowed
+		// draft-to-draft authoring reference (Rule 5).
+		Draft: draftTargetOf(ws, df.Project),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("publish: validation failed: %w", err)
@@ -831,8 +1008,18 @@ func unitFromDraft(a *conformance.Artifact, version int) *exchange.Unit {
 			ExistenceState: a.States[conformance.DomainExistenceState],
 			NoteState:      a.States[conformance.DomainNoteState],
 		},
-		Classification: classification,
-		Phase:          a.Phase,
+		Classification:   classification,
+		Phase:            a.Phase,
+		Provenance:       a.Provenance,
+		SourcePromptHash: a.SourcePromptHash,
+		SourceCommitSha:  a.SourceCommitSha,
+		ValidUntil:       a.ValidUntil,
+		LastConfirmed:    a.LastConfirmed,
+		CaptureMeta: exchange.CaptureMeta{
+			Classifier: a.CaptureMeta.Classifier,
+			DedupeKey:  a.CaptureMeta.DedupeKey,
+			Title:      a.CaptureMeta.Title,
+		},
 		Content: exchange.ContentRef{
 			Representation: exchange.StructuredJSON,
 			File:           "content",
@@ -840,6 +1027,10 @@ func unitFromDraft(a *conformance.Artifact, version int) *exchange.Unit {
 		ContentPayload: payload,
 		ChangeLog:      []exchange.ChangeLogEntry{},
 		Relationships:  []exchange.Relationship{},
+	}
+	if a.HasConfidence {
+		u.Confidence = a.Confidence
+		u.HasConfidence = true
 	}
 	for _, e := range a.ChangeLog {
 		u.ChangeLog = append(u.ChangeLog, exchange.ChangeLogEntry{
@@ -988,12 +1179,16 @@ type inlineCKO struct {
 		ID              string `yaml:"id"`
 		InstanceVersion *int   `yaml:"instanceVersion"` // nil = auto-assign
 	} `yaml:"identity"`
-	Revision       int                        `yaml:"revision"`
-	Author         conformance.AuthorIdentity `yaml:"author"`
-	Created        string                     `yaml:"created"`
-	Updated        string                     `yaml:"updated"`
-	State          map[string]string          `yaml:"state"`
-	Phase          string                     `yaml:"phase"`
+	Revision int                        `yaml:"revision"`
+	Author   conformance.AuthorIdentity `yaml:"author"`
+	Created  string                     `yaml:"created"`
+	Updated  string                     `yaml:"updated"`
+	// Freshness (validity horizon ADR): the declared horizon and the
+	// last confirmation, absolute YYYY-MM-DD dates ("" = undeclared).
+	ValidUntil     string            `yaml:"validUntil"`
+	LastConfirmed  string            `yaml:"lastConfirmed"`
+	State          map[string]string `yaml:"state"`
+	Phase          string            `yaml:"phase"`
 	Classification struct {
 		Dimension           string   `yaml:"dimension"`
 		DimensionsSecondary []string `yaml:"dimensionsSecondary"`
@@ -1017,7 +1212,8 @@ type inlineCKO struct {
 func (AuthoringService) PublishInline(rt *Runtime, input []byte, opts PublishOptions) (*PublishResult, error) {
 	// The workspace must exist: the inline path persists into the
 	// canonical store, and requireWorkspace is the initialization gate.
-	if _, err := rt.requireWorkspace(); err != nil {
+	ws, err := rt.requireWorkspace()
+	if err != nil {
 		return nil, err
 	}
 	st, err := rt.requireStore()
@@ -1072,6 +1268,10 @@ func (AuthoringService) PublishInline(rt *Runtime, input []byte, opts PublishOpt
 		Author:   doc.Author,
 		Created:  doc.Created,
 		Updated:  doc.Updated,
+		// The freshness horizon is author-set state, not a default;
+		// an absent input leaves it undeclared.
+		ValidUntil:    doc.ValidUntil,
+		LastConfirmed: doc.LastConfirmed,
 		StateVector: exchange.StateVector{
 			ContentState:   doc.State["contentState"],
 			ExecutionState: doc.State["executionState"],
@@ -1110,6 +1310,10 @@ func (AuthoringService) PublishInline(rt *Runtime, input []byte, opts PublishOpt
 	resolver := newStoreResolver(st)
 	report, err := conformance.ValidateCKO(u, conformance.ValidateCKOOptions{
 		Resolve: resolver.Resolve,
+		// Draft target tolerance: the inline input has no project
+		// scope, so any project's draft of the target line counts
+		// (the resolveDraftFile cross-project fallback semantics).
+		Draft: draftTargetOf(ws, ""),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("publish: validation failed: %w", err)
@@ -1158,6 +1362,36 @@ func (AuthoringService) Drafts(rt *Runtime, project string) ([]Draft, error) {
 			return nil, err
 		}
 		out = append(out, got...)
+	}
+	if out == nil {
+		out = []Draft{}
+	}
+	return out, nil
+}
+
+// DraftsByProvenance lists drafts filtered by provenance (human|inferred|reconciled|all).
+// provenance "all" or "" returns every draft (no filter). The filter is case-sensitive
+// and deterministic; an unknown value returns an empty list (caller validates).
+func (AuthoringService) DraftsByProvenance(rt *Runtime, project, provenance string) ([]Draft, error) {
+	if provenance == "" || provenance == "all" {
+		return Authoring.Drafts(rt, project)
+	}
+	if !conformance.ValidProvenance(provenance) {
+		return nil, fmt.Errorf("authoring: unknown provenance filter %q (expected human|inferred|reconciled|all)", provenance)
+	}
+	all, err := Authoring.Drafts(rt, project)
+	if err != nil {
+		return nil, err
+	}
+	var out []Draft
+	for _, d := range all {
+		prov := d.Provenance
+		if prov == "" {
+			prov = conformance.ProvenanceHuman
+		}
+		if prov == provenance {
+			out = append(out, d)
+		}
 	}
 	if out == nil {
 		out = []Draft{}
@@ -1214,6 +1448,18 @@ func draftsInProject(root, project string) ([]Draft, error) {
 		}
 		if artifact, err := conformance.ScanFile(path); err == nil && artifact != nil {
 			d.Namespace = artifact.Namespace
+			d.Provenance = artifact.Provenance
+			if d.Provenance == "" {
+				d.Provenance = conformance.ProvenanceHuman
+			}
+			d.SourcePromptHash = artifact.SourcePromptHash
+			d.Confidence = artifact.Confidence
+			d.HasConfidence = artifact.HasConfidence
+			d.CaptureMeta.Classifier = artifact.CaptureMeta.Classifier
+			d.CaptureMeta.DedupeKey = artifact.CaptureMeta.DedupeKey
+			d.CaptureMeta.Title = artifact.CaptureMeta.Title
+		} else {
+			d.Provenance = conformance.ProvenanceHuman
 		}
 		out = append(out, d)
 	}
@@ -1307,6 +1553,10 @@ func (AuthoringService) ValidateDraft(rt *Runtime, target string, projectHint st
 	resolver := newStoreResolver(st)
 	report, err := conformance.ValidateCKO(u, conformance.ValidateCKOOptions{
 		Resolve: resolver.Resolve,
+		// Draft target tolerance: a reference whose target exists
+		// only as a draft of this project is an allowed
+		// draft-to-draft authoring reference (Rule 5).
+		Draft: draftTargetOf(ws, df.Project),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("validate draft: %w", err)

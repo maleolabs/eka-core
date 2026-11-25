@@ -1,0 +1,4 @@
+version: 1
+project: eka-corpus-envelope-absent
+name: envelope-absent
+namespace: eka-corpus

@@ -106,6 +106,8 @@ func Validate(root string) (*Report, error) {
 		e.rule10(a)
 		e.rule11(a)
 		e.rule12(a)
+		e.checkAppliesTo(a) // R0: the Standard 1.5 applicability declaration shape.
+		e.checkChecks(a)    // R0: the Standard 1.7 declared-checks declaration shape.
 	}
 	// The graph pass (R13, ADR-019): the first cross-file validation —
 	// the cmt- note contract, discusses resolution and the work-item
@@ -203,6 +205,14 @@ type engine struct {
 	// nil (the repository Validate path), Rule 5 resolves against the
 	// engine's own artifact index.
 	ckoResolve func(ref Reference) bool
+	// draftRef is the CKO-mode draft-target callback: reports whether
+	// an unresolved reference target exists as a draft (an unpublished
+	// authoring object) of the same project. Rule 5 consults it after
+	// resolution fails: a line-level reference whose target is a draft
+	// is an allowed draft-to-draft authoring reference and produces no
+	// finding. Nil = no draft knowledge (every unresolved reference is
+	// reported).
+	draftRef func(ref Reference) bool
 }
 
 // identityKey builds the identity line key for the index.

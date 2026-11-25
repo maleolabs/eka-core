@@ -17,7 +17,7 @@ func TestOperationsProjection(t *testing.T) {
 	}
 
 	// Fixed group order.
-	wantOrder := []string{"Runbooks", "Release Records"}
+	wantOrder := []string{"Runbooks", "Release Records", "Sharing Objects"}
 	gotOrder := make([]string, len(ops.Groups))
 	for i, gr := range ops.Groups {
 		gotOrder[i] = gr.Name
@@ -34,6 +34,7 @@ func TestOperationsProjection(t *testing.T) {
 		"Release Records": {
 			{validForm + "rel:release-1", "review", "", ""},
 		},
+		"Sharing Objects": {},
 	}
 	for _, gr := range ops.Groups {
 		want := wantGroups[gr.Name]
@@ -52,8 +53,8 @@ func TestOperationsProjectionEmptyDomain(t *testing.T) {
 		t.Fatalf("Build(operations): %v", err)
 	}
 	ops := p.(*OperationsProjection)
-	if len(ops.Groups) != 2 {
-		t.Fatalf("groups = %d, want the fixed two", len(ops.Groups))
+	if len(ops.Groups) != 3 {
+		t.Fatalf("groups = %d, want the fixed three", len(ops.Groups))
 	}
 	for _, gr := range ops.Groups {
 		if len(gr.Artifacts) != 0 {

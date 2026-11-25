@@ -1,0 +1,61 @@
+[
+  {
+    "name": "envelope-full",
+    "dir": "envelope-full",
+    "expect": {
+      "roundtrip": "identical",
+      "unit": [
+        "provenance",
+        "sourcePromptHash",
+        "hasConfidence",
+        "captureMeta.classifier",
+        "captureMeta.dedupeKey",
+        "captureMeta.title",
+        "sourceCommitSha",
+        "validUntil",
+        "lastConfirmed"
+      ],
+      "artifact": [
+        "provenance",
+        "sourcePromptHash",
+        "confidence",
+        "captureMeta.classifier",
+        "captureMeta.dedupeKey",
+        "captureMeta.title",
+        "sourceCommitSha",
+        "validUntil",
+        "lastConfirmed"
+      ]
+    }
+  },
+  {
+    "name": "envelope-absent",
+    "dir": "envelope-absent",
+    "expect": {
+      "roundtrip": "identical",
+      "absent": [
+        "provenance",
+        "sourcePromptHash",
+        "confidence",
+        "hasConfidence",
+        "sourceCommitSha",
+        "captureMeta",
+        "validUntil",
+        "lastConfirmed"
+      ]
+    }
+  },
+  {
+    "name": "note",
+    "dir": "note",
+    "expect": {
+      "roundtrip": "identical",
+      "unit": [
+        "stateVector.noteState"
+      ],
+      "artifact": [
+        "state.noteState"
+      ]
+    }
+  }
+]

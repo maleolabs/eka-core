@@ -55,6 +55,18 @@ type ValidateCKOOptions struct {
 	// path resolves against the engine's own artifact index instead;
 	// this callback exists only for the CKO path.
 	Resolve func(ref Reference) bool
+	// Draft reports whether an unresolved reference target exists as a
+	// draft (an unpublished authoring object) of the same project —
+	// the CKO path's draft knowledge, owned by the runtime (the drafts
+	// tree); conformance only asks. Rule 5 consults it after
+	// resolution fails: a line-level reference whose target is a draft
+	// is an allowed draft-to-draft authoring reference and produces no
+	// finding (the source-side content-state tolerance still applies
+	// to genuinely missing targets). Versioned references name
+	// published instances (drafts never carry instance versions) and
+	// are never tolerated. Nil = no draft knowledge (every unresolved
+	// reference is reported).
+	Draft func(ref Reference) bool
 }
 
 // ValidateCKO validates ONE canonical unit without the location rules:
@@ -82,6 +94,7 @@ func ValidateCKO(u CKOArtifact, opts ValidateCKOOptions) (*Report, error) {
 		report:       report,
 		skipLocation: true,
 		ckoResolve:   opts.Resolve,
+		draftRef:     opts.Draft,
 	}
 	e.artifacts = []*Artifact{a}
 	report.Artifacts = 1
@@ -104,6 +117,8 @@ func ValidateCKO(u CKOArtifact, opts ValidateCKOOptions) (*Report, error) {
 		e.rule10(art)
 		e.rule11(art)
 		e.rule12(art)
+		e.checkAppliesTo(art) // R0: the Standard 1.5 applicability declaration shape.
+		e.checkChecks(art)    // R0: the Standard 1.7 declared-checks declaration shape.
 	}
 	// The graph pass (R13, ADR-019) at CKO level: the unit being
 	// published is a single-artifact set, so the work-item transition
@@ -125,7 +140,7 @@ func ValidateCKO(u CKOArtifact, opts ValidateCKOOptions) (*Report, error) {
 func ckoStructural(e *engine, a *Artifact) {
 	if _, ok := typeTokens[a.Type]; !ok {
 		e.add(a, RuleStructural, SeverityError,
-			"unknown artifact type %q; expected one of the 27 EKA type tokens", a.Type)
+			"unknown artifact type %q; expected one of the %d EKA type tokens", a.Type, len(typeTokens))
 	}
 	if a.ID == "" {
 		e.add(a, RuleStructural, SeverityError,
@@ -160,8 +175,8 @@ func ckoStructural(e *engine, a *Artifact) {
 	}
 }
 
-// isRelationshipField reports whether field is one of the five canonical
-// relationship field names (Rule 5).
+// isRelationshipField reports whether field is one of the eight
+// canonical relationship field names (Rule 5).
 func isRelationshipField(field string) bool {
 	for _, f := range relationshipFields {
 		if f == field {

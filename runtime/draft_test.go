@@ -183,6 +183,60 @@ func TestNewDraftValidation(t *testing.T) {
 	}
 }
 
+// TestNewDraftPhaseChangeLogEntry: a scaffolded draft carrying a phase
+// covers the phase context with a change-log entry ("-" -> the given
+// value, by the author, same date as the state entries) — rule 7
+// requires a change-log entry for every field with a change-log domain,
+// so a plan draft scaffolded with --phase must validate clean without
+// edits (R6 is orthogonal: knowledge artifacts need --dimension).
+func TestNewDraftPhaseChangeLogEntry(t *testing.T) {
+	r, project := draftRuntime(t)
+	d, err := Authoring.NewDraft(r, NewDraftRequest{
+		Project:   project,
+		Namespace: "feather",
+		Type:      "plan",
+		ID:        "roadmap-v2",
+		Dimension: "planning",
+		Phase:     "mvp",
+		By:        conformance.User("Ada Lovelace"),
+	})
+	if err != nil {
+		t.Fatalf("NewDraft: %v", err)
+	}
+	data, err := os.ReadFile(d.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		`"phase": "mvp"`, // the phase field itself
+		// The phase change-log entry, scaffolded alongside the field.
+		`"domain": "phase"`,
+		`"from": "-"`,
+		`"to": "mvp"`,
+		`"by": "Ada Lovelace"`,
+		// The owned-domain entries stay.
+		`"domain": "contentState"`,
+		`"domain": "planningState"`,
+		`"domain": "existenceState"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("draft template missing %q:\n%s", want, text)
+		}
+	}
+	// R7: the change-log covers the phase context, so the scaffolded
+	// draft validates clean — the acceptance criterion (`eka new
+	// plan:x --phase mvp`, then `eka draft validate` passes).
+	dv, err := Authoring.ValidateDraft(r, "feather/plan:roadmap-v2", "")
+	if err != nil {
+		t.Fatalf("ValidateDraft: %v", err)
+	}
+	if !dv.Report.Pass() {
+		t.Errorf("a phase-carrying scaffolded draft must validate clean, got %d errors: %+v",
+			dv.Report.ErrorCount(), dv.Report.SortedResults())
+	}
+}
+
 // TestNewDraftCollision: a second draft with the same project/type/id
 // is refused.
 func TestNewDraftCollision(t *testing.T) {
@@ -1451,6 +1505,91 @@ func TestValidateDraft(t *testing.T) {
 	}
 	if !dv.Report.Pass() {
 		t.Errorf("the hinted draft must validate clean: %+v", dv.Report.SortedResults())
+	}
+}
+
+// TestValidateDraftDraftToDraftTargetTolerance (fix-draft-reference
+// -tolerance): a draft referencing another draft (both unpublished,
+// same project) validates with NO R5 finding — the target-side draft
+// tolerance. sto- drafts own no content-state, so the source-side
+// content-state tolerance would not apply: this is the reported
+// regression (previously a hard R5 error). The tolerance is
+// target-specific (a reference to a truly missing line still flags
+// R5), and the publish gate shares it (draft A publishes while draft B
+// is still unpublished).
+func TestValidateDraftDraftToDraftTargetTolerance(t *testing.T) {
+	r, project := draftRuntime(t)
+	// Draft B exists only as a draft; draft A references it.
+	newSTODraft(t, r, project, "feather", "b", nil)
+	newSTODraft(t, r, project, "feather", "a",
+		[]exchange.Relationship{{Type: "depends-on", Target: "feather/sto:b"}})
+
+	dv, err := Authoring.ValidateDraft(r, "feather/sto:a", "")
+	if err != nil {
+		t.Fatalf("ValidateDraft: %v", err)
+	}
+	if !dv.Report.Pass() {
+		t.Errorf("a draft referencing another draft must validate, got %d errors: %+v",
+			dv.Report.ErrorCount(), dv.Report.SortedResults())
+	}
+	for _, res := range dv.Report.Results {
+		if res.Rule == "R5" {
+			t.Errorf("R5 finding on a draft-to-draft reference: %+v", res)
+		}
+	}
+
+	// The tolerance is target-specific: a reference to a truly
+	// missing line still flags R5.
+	newSTODraft(t, r, project, "feather", "c",
+		[]exchange.Relationship{{Type: "depends-on", Target: "feather/sto:missing"}})
+	dv, err = Authoring.ValidateDraft(r, "feather/sto:c", "")
+	if err != nil {
+		t.Fatalf("ValidateDraft: %v", err)
+	}
+	found := false
+	for _, res := range dv.Report.Results {
+		if res.Rule == "R5" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a reference to a truly missing line must still flag R5: %+v", dv.Report.SortedResults())
+	}
+
+	// The publish gate shares the pipeline: A publishes while B is
+	// still a draft.
+	if _, err := Authoring.Publish(r, "feather/sto:a", PublishOptions{}); err != nil {
+		t.Errorf("publish of a draft referencing a draft must succeed: %v", err)
+	}
+}
+
+// TestValidateDraftDraftTargetCrossNamespaceNotTolerated: the draft
+// target tolerance is same-namespace-only — a cross-namespace
+// reference is never tolerated, even when a same-named draft file
+// exists under the project (the file's frontmatter namespace decides;
+// without the check the wrong-namespace reference would pass as
+// draft-to-draft and publish as a dangling reference).
+func TestValidateDraftDraftTargetCrossNamespaceNotTolerated(t *testing.T) {
+	r, project := draftRuntime(t)
+	// Draft B exists in the project, but under namespace feather; A
+	// references it under the WRONG namespace (other/sto:b): the
+	// draft file cannot verify the referenced line, so R5 flags.
+	newSTODraft(t, r, project, "feather", "b", nil)
+	newSTODraft(t, r, project, "feather", "a",
+		[]exchange.Relationship{{Type: "depends-on", Target: "other/sto:b"}})
+
+	dv, err := Authoring.ValidateDraft(r, "feather/sto:a", "")
+	if err != nil {
+		t.Fatalf("ValidateDraft: %v", err)
+	}
+	found := false
+	for _, res := range dv.Report.Results {
+		if res.Rule == "R5" && strings.Contains(res.Message, "other/sto:b") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("a cross-namespace reference to a draft file must still flag R5: %+v", dv.Report.SortedResults())
 	}
 }
 

@@ -34,6 +34,11 @@ type SyncOptions = sync.Options
 // sync contract type).
 type SyncResult = sync.Report
 
+// SyncAdoptResult is the outcome of one adopt run (re-exported sync
+// contract type): the units re-attributed from the workspace-native
+// provenance to the repository provenance (ADR-032 Option C2).
+type SyncAdoptResult = sync.AdoptResult
+
 // ValidationError reports that a repository failed the authoring
 // conformance gate (re-exported compile contract type, so
 // errors.As(err, &ve) works through the Runtime).
@@ -75,6 +80,30 @@ func (AuthoringService) Sync(rt *Runtime, repoPath string, opts SyncOptions) (*S
 		return nil, err
 	}
 	return sync.Run(ws, repoPath, opts)
+}
+
+// SyncAdopt re-attributes the workspace-native units (source_repo =
+// "runtime" — the `eka publish` provenance sentinel) of the
+// repository's project to the repository provenance (ADR-032 Option
+// C2): the next push assembles them into the snapshot, so a clone on
+// another device receives them. The repository is resolved with the
+// same conventions as Sync (ADR-018 eka.yaml walk-up gate, ADR-017
+// identity resolution with auto-registration and path refresh — the
+// ADR-020 content-namespace reconciliation is not relevant, adopt
+// reads no repository content). Without targets every workspace-native
+// unit of the project is adopted; with targets only the units matching
+// them (`<namespace>/<type>:<id>` or `<type>:<id>`, optional
+// `:<instance-version>` suffix; the namespace must equal the
+// repository namespace). dryRun computes the identical result without
+// touching the store. Refusals (invalid target, namespace mismatch, no
+// matching workspace-native unit) and internal failures are plain
+// wrapped errors mapped to exit code 2 by the CLI.
+func (AuthoringService) SyncAdopt(rt *Runtime, repoPath string, targets []string, dryRun bool) (*SyncAdoptResult, error) {
+	ws, err := rt.requireWorkspace()
+	if err != nil {
+		return nil, err
+	}
+	return sync.AdoptAt(ws, repoPath, targets, dryRun)
 }
 
 // Authoring is the package-level Authoring API: the stateless service

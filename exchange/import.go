@@ -307,6 +307,7 @@ func checkUnitStates(pkg *loadedPackage) error {
 			{conformance.DomainPlanningState, u.StateVector.PlanningState},
 			{conformance.DomainContainerState, u.StateVector.ContainerState},
 			{conformance.DomainExistenceState, u.StateVector.ExistenceState},
+			{conformance.DomainNoteState, u.StateVector.NoteState},
 		} {
 			if d.value == "" {
 				if owned[d.domain] {
@@ -471,17 +472,24 @@ func (u *Unit) StateVectorValue(domain string) string {
 		return u.StateVector.ContainerState
 	case conformance.DomainExistenceState:
 		return u.StateVector.ExistenceState
+	case conformance.DomainNoteState:
+		return u.StateVector.NoteState
 	}
 	return ""
 }
 
-// isKnownStateDomain reports whether d is one of the five owned state
-// domains or the phase context attribute.
+// isKnownStateDomain reports whether d is one of the six owned state
+// domains or the phase context attribute. The set is spelled out here
+// because the refusal it guards ("unknown domain") must stay a refusal: a
+// domain the vector cannot address has no ownership check and would be
+// compared against "" by the change-log consistency pass, so admitting a
+// misspelt domain silently would disable that pass for it.
 func isKnownStateDomain(d string) bool {
 	switch d {
 	case conformance.DomainContentState, conformance.DomainExecutionState,
 		conformance.DomainPlanningState, conformance.DomainContainerState,
-		conformance.DomainExistenceState, conformance.DomainPhase:
+		conformance.DomainExistenceState, conformance.DomainNoteState,
+		conformance.DomainPhase:
 		return true
 	}
 	return false

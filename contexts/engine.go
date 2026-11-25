@@ -203,8 +203,20 @@ func (e *Engine) buildFocus(u *exchange.Unit, projectID string, opts Options) (*
 			ExistenceState: u.StateVector.ExistenceState,
 			NoteState:      u.StateVector.NoteState,
 		},
-		Phase:      u.Phase,
-		ObjectHash: u.Digest,
+		Phase:            u.Phase,
+		Provenance:       u.Provenance,
+		SourcePromptHash: u.SourcePromptHash,
+		SourceCommitSha:  u.SourceCommitSha,
+		ObjectHash:       u.Digest,
+	}
+	// A declared 0.0 is a claim, not an absence (hasConfidence): render it
+	// like any other declared value so the projection matches the object.
+	if u.HasConfidence || u.Confidence != 0 {
+		v := u.Confidence
+		focus.Confidence = &v
+	}
+	if u.CaptureMeta.Classifier != "" || u.CaptureMeta.DedupeKey != "" || u.CaptureMeta.Title != "" {
+		focus.CaptureMeta = &CaptureMeta{Classifier: u.CaptureMeta.Classifier, DedupeKey: u.CaptureMeta.DedupeKey, Title: u.CaptureMeta.Title}
 	}
 	// The line's issue number (RFC): additive "number" field — 0 (no
 	// number) omits it; the lookup failure is ignored exactly like the

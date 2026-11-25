@@ -30,6 +30,11 @@ import (
 //     canonical relationship types produce entries; a unit carrying
 //     another type is reported by ValidateCKO's structural check);
 //   - the change log in occurrence order;
+//   - the provenance capture fields (provenance, sourcePromptHash,
+//     confidence, sourceCommitSha, captureMeta) — the same envelope
+//     state builder.go toUnit writes, so CKO-level validation observes
+//     what the unit actually carries;
+//   - the freshness envelope fields (validUntil, lastConfirmed);
 //   - the content: structured-json payloads (the v2.0 representation)
 //     project onto ContentFields — the structured content object the
 //     section rules evaluate (R9 as a key check, R8 content values);
@@ -90,6 +95,21 @@ func (u *Unit) ToArtifact() *conformance.Artifact {
 			Date: e.Date, Domain: e.Domain, From: e.From, To: e.To, By: e.By.Name, ByKind: e.By.Kind,
 		})
 	}
+	a.Provenance = u.Provenance
+	if a.Provenance == "" {
+		a.Provenance = conformance.ProvenanceHuman
+	}
+	a.SourcePromptHash = u.SourcePromptHash
+	if v := artifactConfidence(u); v != nil {
+		a.Confidence = *v
+		a.HasConfidence = true
+	}
+	a.SourceCommitSha = u.SourceCommitSha
+	a.CaptureMeta.Classifier = u.CaptureMeta.Classifier
+	a.CaptureMeta.DedupeKey = u.CaptureMeta.DedupeKey
+	a.CaptureMeta.Title = u.CaptureMeta.Title
+	a.ValidUntil = u.ValidUntil
+	a.LastConfirmed = u.LastConfirmed
 	a.BodyLines = strings.Split(string(u.ContentPayload), "\n")
 	if u.Content.Representation == StructuredJSON {
 		// The structured content object: the canonical payload parses

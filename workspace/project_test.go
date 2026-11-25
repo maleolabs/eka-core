@@ -210,3 +210,177 @@ func TestFindRepoLegacyPath(t *testing.T) {
 		t.Errorf("unknown path must not be found: %v, %v", found, err)
 	}
 }
+
+// TestUnregisterRepo: the repos row (project_id, name) is deleted and
+// removed reports true; the registry no longer resolves the row. When
+// the removed repository was the project's LAST repository the empty
+// project row is deleted too.
+func TestUnregisterRepo(t *testing.T) {
+	w := ensureTest(t)
+	dirA := filepath.Join(t.TempDir(), "backend")
+	dirB := filepath.Join(t.TempDir(), "frontend")
+	for _, dir := range []string{dirA, dirB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, _, err := w.RegisterRepo(dirA, "multi"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := w.RegisterRepo(dirB, "multi"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove the first repo: removed = true, the row is gone, the
+	// project stays (it still has one repository).
+	removed, err := w.UnregisterRepo("multi", "backend")
+	if err != nil || !removed {
+		t.Fatalf("UnregisterRepo(backend) = %v, %v; want true, nil", removed, err)
+	}
+	repos, err := w.Repos("multi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0].Name != "frontend" {
+		t.Fatalf("Repos after removal = %+v, want only frontend", repos)
+	}
+	projects, err := w.Projects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].ID != "multi" {
+		t.Fatalf("Projects after the first removal = %+v, want multi to stay", projects)
+	}
+
+	// Remove the LAST repo: removed = true and the emptied project
+	// row is deleted too.
+	removed, err = w.UnregisterRepo("multi", "frontend")
+	if err != nil || !removed {
+		t.Fatalf("UnregisterRepo(frontend) = %v, %v; want true, nil", removed, err)
+	}
+	projects, err = w.Projects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 0 {
+		t.Errorf("Projects after removing the last repo = %+v, want the emptied project deleted", projects)
+	}
+}
+
+// TestUnregisterRepoMissing: an unregistered (project_id, name) pair
+// reports removed = false — not an error — and touches nothing.
+func TestUnregisterRepoMissing(t *testing.T) {
+	w := ensureTest(t)
+	dir := filepath.Join(t.TempDir(), "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := w.RegisterRepo(dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := w.UnregisterRepo("proj", "ghost")
+	if err != nil || removed {
+		t.Errorf("UnregisterRepo(proj/ghost) = %v, %v; want false, nil", removed, err)
+	}
+	// The existing repository is untouched by the missing-pair call.
+	repos, err := w.Repos("proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0].Name != "proj" {
+		t.Errorf("Repos = %+v, want proj untouched", repos)
+	}
+	// An unknown project reports false too.
+	if removed, err := w.UnregisterRepo("ghost-project", "ghost"); err != nil || removed {
+		t.Errorf("UnregisterRepo(ghost-project/ghost) = %v, %v; want false, nil", removed, err)
+	}
+}
+
+// TestUnregisterRepoReservedName: the reserved provenance sentinel
+// "runtime" is refused with the same deterministic error as
+// registration — it can never be unregistered because it can never be
+// registered.
+func TestUnregisterRepoReservedName(t *testing.T) {
+	w := ensureTest(t)
+	_, err := w.UnregisterRepo("atrium", ReservedRepoName)
+	if err == nil {
+		t.Fatal("unregistering the reserved name runtime must be refused")
+	}
+	if !strings.Contains(err.Error(), `repository name "runtime" is reserved for workspace-native knowledge`) {
+		t.Errorf("refusal error = %v, want the reserved-name message", err)
+	}
+}
+
+// TestUnregisterProject: every repository row under the project is
+// deleted and the project row is deleted too; the count reports the
+// number of removed repositories. An unknown project reports 0 — not
+// an error — and an orphaned empty project row (unreachable through
+// the public API, defensive) is cleaned up as well.
+func TestUnregisterProject(t *testing.T) {
+	w := ensureTest(t)
+	dirA := filepath.Join(t.TempDir(), "backend")
+	dirB := filepath.Join(t.TempDir(), "frontend")
+	dirC := filepath.Join(t.TempDir(), "other")
+	for _, dir := range []string{dirA, dirB, dirC} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, _, err := w.RegisterRepo(dirA, "multi"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := w.RegisterRepo(dirB, "multi"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := w.RegisterRepo(dirC, "other"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unregister the whole multi project: both repos go, other stays.
+	n, err := w.UnregisterProject("multi")
+	if err != nil {
+		t.Fatalf("UnregisterProject(multi): %v", err)
+	}
+	if n != 2 {
+		t.Errorf("UnregisterProject(multi) removed %d repos, want 2", n)
+	}
+	repos, err := w.Repos("multi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 0 {
+		t.Errorf("Repos(multi) after unregister = %+v, want empty", repos)
+	}
+	projects, err := w.Projects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projects) != 1 || projects[0].ID != "other" {
+		t.Errorf("Projects after unregister = %+v, want only other", projects)
+	}
+
+	// An unknown project reports 0 without error.
+	n, err = w.UnregisterProject("ghost-project")
+	if err != nil || n != 0 {
+		t.Errorf("UnregisterProject(ghost-project) = %d, %v; want 0, nil", n, err)
+	}
+
+	// An orphaned empty project row (defensive: unreachable via the
+	// public API) is cleaned up too.
+	if _, err := w.Store().DB().Exec(`INSERT INTO projects (id, name, created) VALUES ('orphan', 'orphan', '2026-01-01')`); err != nil {
+		t.Fatal(err)
+	}
+	n, err = w.UnregisterProject("orphan")
+	if err != nil || n != 0 {
+		t.Errorf("UnregisterProject(orphan) = %d, %v; want 0, nil", n, err)
+	}
+	projects, err = w.Projects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range projects {
+		if p.ID == "orphan" {
+			t.Errorf("orphan project row survived UnregisterProject: %+v", projects)
+		}
+	}
+}

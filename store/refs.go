@@ -95,6 +95,36 @@ func (s *Store) Refs(projectID, sourceRepo string) ([]*Ref, error) {
 	return out, nil
 }
 
+// RefsByProject returns every reference of one project across every
+// source repository, sorted by form (canonical identity order). The
+// scope-aware container gates (one active container per source_repo)
+// read the provenance pair this projection carries — UnitsByProject
+// drops the source_repo attribution.
+func (s *Store) RefsByProject(projectID string) ([]*Ref, error) {
+	rows, err := s.db.Query(`SELECT
+		form, object_hash, project_id, source_repo, namespace, type, id,
+		instance_version, revision, dimension, domain, phase, updated_at
+		FROM object_refs WHERE project_id = ? ORDER BY form`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("store: cannot query references: %w", err)
+	}
+	defer rows.Close()
+	var out []*Ref
+	for rows.Next() {
+		var r Ref
+		if err := rows.Scan(
+			&r.Form, &r.ObjectHash, &r.ProjectID, &r.SourceRepo, &r.Namespace, &r.Type, &r.ID,
+			&r.InstanceVersion, &r.Revision, &r.Dimension, &r.Domain, &r.Phase, &r.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("store: cannot scan reference row: %w", err)
+		}
+		out = append(out, &r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: cannot read references: %w", err)
+	}
+	return out, nil
+}
+
 // RefCount returns the number of stored references.
 func (s *Store) RefCount() (int, error) {
 	return s.count("object_refs")

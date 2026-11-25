@@ -6,13 +6,13 @@ import (
 )
 
 // TestDomainForTokenComplete verifies the canonical mapping table is
-// complete and duplicate-free: every one of the 27 type tokens maps to a
+// complete and duplicate-free: every one of the 29 type tokens maps to a
 // home domain, no token maps twice (map keys are unique by construction),
 // and the token set of the domain table equals the token set of the
 // type/state taxonomy exactly (no drift between the two tables).
 func TestDomainForTokenComplete(t *testing.T) {
-	if len(tokenDomain) != 27 {
-		t.Fatalf("token domain table has %d entries, want 27 (26 + cmt, ADR-019)", len(tokenDomain))
+	if len(tokenDomain) != 29 {
+		t.Fatalf("token domain table has %d entries, want 29 (26 + cmt, ADR-019, + mbr, ADR-029, + shr, standard 1.3)", len(tokenDomain))
 	}
 	for tok := range typeTokens {
 		d, ok := DomainForToken(tok)
@@ -51,7 +51,8 @@ func TestDomainForTokenValues(t *testing.T) {
 		"rvw": Execution, "ctr": Execution, "tkt": Execution,
 		"sto": Execution, "ts": Execution, "bug": Execution, "td": Execution,
 		"ch": Execution, "spk": Execution, "ses": Execution,
-		"run": Operations, "rel": Operations,
+		"cmt": Execution, "mbr": Execution,
+		"run": Operations, "rel": Operations, "shr": Operations,
 	}
 	for tok, wantDomain := range want {
 		got, ok := DomainForToken(tok)

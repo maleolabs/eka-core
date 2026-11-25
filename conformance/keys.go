@@ -57,6 +57,14 @@ func IsKnownType(token string) bool {
 	return ok
 }
 
+// TypeTokenCount returns the number of canonical artifact type tokens
+// (the size of the type table). Consumed by refusal diagnostics ("...one
+// of the %d EKA type tokens") so the message can never go stale when the
+// table grows additively.
+func TypeTokenCount() int {
+	return len(typeTokens)
+}
+
 // jsonStateKeyToDomain maps the JSON authoring state domain keys
 // (spec-standard-v2 §3.2) to the internal kebab domain names the rule
 // engine evaluates. State VALUES are unchanged — only the keys are

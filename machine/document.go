@@ -48,10 +48,24 @@ type Document struct {
 	StateVector    StateVector                 `json:"stateVector"`
 	Phase          string                      `json:"phase,omitempty"`
 	Classification *Classification             `json:"classification,omitempty"`
-	Relationships  []Relationship              `json:"relationships,omitempty"`
-	ChangeLog      []ChangeLogEntry            `json:"changeLog,omitempty"`
-	Content        *Content                    `json:"content,omitempty"`
-	ObjectHash     string                      `json:"objectHash"`
+	// Provenance capture fields (ADR-035 v3, additive; omitempty keeps old payloads valid).
+	Provenance       string       `json:"provenance,omitempty"`
+	Confidence       *float64     `json:"confidence,omitempty"`
+	SourcePromptHash string       `json:"sourcePromptHash,omitempty"`
+	SourceCommitSha  string       `json:"sourceCommitSha,omitempty"`
+	CaptureMeta      *CaptureMeta `json:"captureMeta,omitempty"`
+	// Freshness (validity horizon ADR): the declared validity horizon
+	// and the last human confirmation, absolute YYYY-MM-DD dates
+	// (omitempty — a document without them is byte-identical to the
+	// pre-freshness schema). Advisory only: the values are never
+	// compared against a clock here; the clock-dependent view is the
+	// retrieval-option Freshness block below.
+	ValidUntil    string           `json:"validUntil,omitempty"`
+	LastConfirmed string           `json:"lastConfirmed,omitempty"`
+	Relationships []Relationship   `json:"relationships,omitempty"`
+	ChangeLog     []ChangeLogEntry `json:"changeLog,omitempty"`
+	Content       *Content         `json:"content,omitempty"`
+	ObjectHash    string           `json:"objectHash"`
 	// Retrieval options (ADR-015 additive contract): appended at the
 	// END of the schema — absent until a retrieval flag asks for them,
 	// so the default document is byte-identical to the pre-option
@@ -59,6 +73,24 @@ type Document struct {
 	Upstream   []*Document     `json:"upstream,omitempty"`
 	Downstream []*Document     `json:"downstream,omitempty"`
 	Timeline   []TimelineEntry `json:"timeline,omitempty"`
+	// Freshness is the clock-dependent freshness view (--freshness): the
+	// declared horizon, the last confirmation and the derived status.
+	// Appended here for the same additive reason as the traversals —
+	// NewDocument never sets it.
+	Freshness *Freshness `json:"freshness,omitempty"`
+}
+
+// Freshness is the freshness verdict of one knowledge object as of an
+// injected clock: the declared validity horizon and last confirmation
+// ("" when undeclared), the whole days from now to the horizon
+// (negative once past), and the status — "stale" (past the horizon),
+// "current" (inside it) or "undeclared" (no horizon declared, the
+// honest third state: never a default, never a penalty).
+type Freshness struct {
+	ValidUntil      string `json:"validUntil,omitempty"`
+	LastConfirmed   string `json:"lastConfirmed,omitempty"`
+	DaysUntilExpiry int    `json:"daysUntilExpiry"`
+	Status          string `json:"status"`
 }
 
 // Identity is the complete identity tuple of the CKO, in the fixed
@@ -123,6 +155,17 @@ type Classification struct {
 	Domain              string   `json:"domain,omitempty"`
 }
 
+// CaptureMeta holds classifier/dedupe metadata (ADR-035 v3,
+// spec provenance-capture:1) — the same three fields the exchange unit
+// carries, title included: the document is a projection of the object, so a
+// field it dropped would be unrecoverable from the machine surface while
+// still present in the knowledge.
+type CaptureMeta struct {
+	Classifier string `json:"classifier,omitempty"`
+	DedupeKey  string `json:"dedupeKey,omitempty"`
+	Title      string `json:"title,omitempty"`
+}
+
 // Content is the representation-tagged knowledge payload: the opaque
 // representation payload of the CKO, never parsed or re-structured.
 // Text may be large — that is the knowledge content; it is never
@@ -158,6 +201,10 @@ type Content struct {
 //     not valid JSON degrades deterministically to the text shape);
 //   - object_hash is the CKO digest ("" for hand-built units, kept
 //     as-is).
+//
+// Freshness is never set here: it is a retrieval option derived from
+// an injected clock, so the default document carries no freshness
+// block.
 func NewDocument(u *exchange.Unit) (*Document, error) {
 	if u == nil {
 		return nil, fmt.Errorf("machine: cannot build a document from a nil unit")
@@ -195,6 +242,12 @@ func NewDocument(u *exchange.Unit) (*Document, error) {
 			NoteState:      u.StateVector.NoteState,
 		},
 		Phase: u.Phase,
+		// Provenance is additive; human is the default but omitempty keeps old payloads valid.
+		Provenance:       u.Provenance,
+		SourcePromptHash: u.SourcePromptHash,
+		SourceCommitSha:  u.SourceCommitSha,
+		ValidUntil:       u.ValidUntil,
+		LastConfirmed:    u.LastConfirmed,
 		// The content pointer: NewDocument always sets it, so the
 		// default document carries content exactly as before — the
 		// pointer (plus omitempty) exists so retrieval options can
@@ -202,6 +255,15 @@ func NewDocument(u *exchange.Unit) (*Document, error) {
 		// default schema.
 		Content:    content,
 		ObjectHash: u.Digest,
+	}
+	// A declared 0.0 is a claim, not an absence (hasConfidence): render it
+	// like any other declared value so the projection matches the object.
+	if u.HasConfidence || u.Confidence != 0 {
+		v := u.Confidence
+		doc.Confidence = &v
+	}
+	if u.CaptureMeta.Classifier != "" || u.CaptureMeta.DedupeKey != "" || u.CaptureMeta.Title != "" {
+		doc.CaptureMeta = &CaptureMeta{Classifier: u.CaptureMeta.Classifier, DedupeKey: u.CaptureMeta.DedupeKey, Title: u.CaptureMeta.Title}
 	}
 	if u.Classification.Dimension != "" || len(u.Classification.DimensionsSecondary) > 0 || u.Classification.Domain != "" {
 		c := Classification{

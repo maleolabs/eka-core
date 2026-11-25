@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,23 @@ import (
 
 // validYAML is the canonical valid eka.yaml used across the tests.
 const validYAML = "version: 1\nproject: atrium\nname: api\nnamespace: atrium-api\n"
+
+// TestSchemaVersionConstant: the exported SchemaVersion is the single
+// source of the eka.yaml schema version — Parse accepts exactly that
+// version and refuses every other one. Locking the value keeps the
+// constant and the parser in lockstep (a wrong constant would fail the
+// accept/refuse pair below).
+func TestSchemaVersionConstant(t *testing.T) {
+	if SchemaVersion != 1 {
+		t.Errorf("SchemaVersion = %d, want 1 (the ratified eka.yaml schema version)", SchemaVersion)
+	}
+	if _, err := Parse([]byte(fmt.Sprintf("version: %d\nproject: atrium\nname: api\nnamespace: atrium-api\n", SchemaVersion))); err != nil {
+		t.Errorf("Parse with SchemaVersion = %d: %v; want accept", SchemaVersion, err)
+	}
+	if _, err := Parse([]byte(fmt.Sprintf("version: %d\nproject: atrium\nname: api\nnamespace: atrium-api\n", SchemaVersion+1))); err == nil {
+		t.Errorf("Parse with SchemaVersion+1 = %d must refuse", SchemaVersion+1)
+	}
+}
 
 // TestParseValid: a well-formed eka.yaml decodes into the metadata
 // triple.

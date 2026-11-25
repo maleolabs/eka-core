@@ -192,6 +192,53 @@ func dumpResults(report *Report) string {
 	return b.String()
 }
 
+// TestValidAssignedFixtureRepo: the 'Assigned Work' fixture (ADR-029)
+// exercises the full pipeline with an mbr- member file and assigned-to
+// frontmatter: the mbr- filename passes R2, the assigned-to reference
+// resolves through R5 (and the R13 sub-check passes at done with zero
+// notes), and the isolated member line is exempt from R10 stratification
+// — the only R10 warnings are the two work items (never exempt).
+func TestValidAssignedFixtureRepo(t *testing.T) {
+	report, err := Validate(fixturePath(t, "valid-assigned"))
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if report.FilesScanned != 3 {
+		t.Errorf("files scanned = %d, want 3 (mbr- + two work items)", report.FilesScanned)
+	}
+	if report.Artifacts != 3 {
+		t.Errorf("artifacts = %d, want 3", report.Artifacts)
+	}
+	if report.ErrorCount() != 0 {
+		t.Errorf("errors = %d, want 0:\n%s", report.ErrorCount(), dumpResults(report))
+	}
+	// R10: exactly the two isolated work items warn; the member line is
+	// exempt (ADR-029) despite carrying no upward chain.
+	r10Files := map[string]bool{}
+	for _, r := range resultsFor(report, Rule10) {
+		r10Files[r.File] = true
+	}
+	for _, file := range []string{
+		"docs/operating/work-items/stories/sto-assigned.md",
+		"docs/operating/work-items/stories/sto-unassigned.md",
+	} {
+		if !r10Files[file] {
+			t.Errorf("missing R10 warning on non-exempt work item %s\nresults:\n%s", file, dumpResults(report))
+		}
+	}
+	if r10Files["docs/operating/members/mbr-alice.md"] {
+		t.Error("unexpected R10 warning on the exempt member line mbr-alice.md")
+	}
+	// R13: the assigned-to sub-check and the done gate pass for both
+	// work items (zero notes, valid same-repository member target).
+	if n := countResults(report, Rule13, SeverityError); n != 0 {
+		t.Errorf("R13 errors = %d, want 0:\n%s", n, dumpResults(report))
+	}
+	if !report.Pass() {
+		t.Error("valid-assigned fixture must pass")
+	}
+}
+
 // TestDomainValidFixtureRepo: the Engineering Domain fixture where every
 // rule passes — declared domains match, every non-Discovery artifact has
 // a resolvable upward chain (direct or transitive), no supersession

@@ -75,6 +75,11 @@ type Focus struct {
 	StateVector       StateVector     `json:"stateVector"`
 	Phase             string          `json:"phase,omitempty"`
 	Classification    *Classification `json:"classification,omitempty"`
+	Provenance        string          `json:"provenance,omitempty"`
+	Confidence        *float64        `json:"confidence,omitempty"`
+	SourcePromptHash  string          `json:"sourcePromptHash,omitempty"`
+	SourceCommitSha   string          `json:"sourceCommitSha,omitempty"`
+	CaptureMeta       *CaptureMeta    `json:"captureMeta,omitempty"`
 	Relationships     []Relationship  `json:"relationships,omitempty"`
 	// Content is nil (absent from the JSON) when the build ran with
 	// Options.NoContent.
@@ -120,6 +125,16 @@ type Relationship struct {
 	Target string `json:"target"`
 }
 
+// CaptureMeta holds classifier/dedupe metadata (ADR-035 v3,
+// spec provenance-capture:1) — the same three fields the exchange unit
+// carries, title included: the focus projection must not be lossier than the
+// object it projects.
+type CaptureMeta struct {
+	Classifier string `json:"classifier,omitempty"`
+	DedupeKey  string `json:"dedupeKey,omitempty"`
+	Title      string `json:"title,omitempty"`
+}
+
 // Content is the representation-tagged knowledge payload of the focus
 // unit, never parsed or re-structured (the machine content shape:
 // eka/structured-json/1 travels as `fields`, legacy
@@ -154,7 +169,8 @@ type Entry struct {
 	// Role is the reason the unit is in this section: the relationship
 	// type that pulled it in, or "constraint" for higher-authority
 	// units reached only through the bounded closure.
-	Role string `json:"role,omitempty"`
+	Role       string `json:"role,omitempty"`
+	ObjectHash string `json:"objectHash,omitempty"`
 }
 
 // Stratum is one non-empty stratum group of the collected units:

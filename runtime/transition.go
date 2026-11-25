@@ -21,7 +21,9 @@ import (
 // This file implements the `eka transition` side of the Authoring API
 // (ADR-019 D2, revised per implementation feedback): the structured,
 // non-interactive way to move a work item along the D1 transition
-// table.
+// table, a plan along the planning-state table, a container along the
+// container-state table, or a knowledge artifact along the
+// content-state lifecycle.
 //
 // Revised model (documented deviation): transitions operate on the
 // WORKSPACE, never on the repository docs tree — the docs tree is the
@@ -49,7 +51,10 @@ type TransitionRequest struct {
 	// must equal the repository namespace) or "<type>:<id>"
 	// (unqualified — the repository namespace applies).
 	Target string
-	// To is the explicit destination execution-state value (D1 table).
+	// To is the explicit destination state value of the target's
+	// transition domain (the D1 table for work items, the
+	// planning-state table for plans, the container-state table for
+	// containers, the content-state lifecycle for knowledge artifacts).
 	// Exactly one of To / Forward / Backward must be set.
 	To string
 	// Forward requests the next step of the D1 table from the current
@@ -210,8 +215,8 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 	if ref.HasVersion {
 		return nil, fmt.Errorf("transition: %s is a canonical published form; transition addresses the work item line", req.Target) // Exit 2.
 	}
-	if !conformance.IsWorkItemType(ref.Type) && ref.Type != "plan" && ref.Type != "ctr" {
-		return nil, fmt.Errorf("transition: %s is not transitionable (work items sto/ts/bug/td/ch/spk, plans plan-, containers ctr-)", req.Target) // Exit 2.
+	if !conformance.IsWorkItemType(ref.Type) && ref.Type != "plan" && ref.Type != "ctr" && !ownsContentState(ref.Type) {
+		return nil, fmt.Errorf("transition: %s is not transitionable (work items sto/ts/bug/td/ch/spk, plans plan-, containers ctr-, knowledge artifacts with content-state)", req.Target) // Exit 2.
 	}
 	if ref.Namespace != "" && ref.Namespace != meta.Namespace {
 		return nil, fmt.Errorf("transition: target namespace %s differs from the repository namespace %s; cross-platform access is read-only",
@@ -243,9 +248,18 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 
 	// The transitionable types and their state domains: work items own
 	// execution-state (the D1 table), plans own planning-state (draft
-	// -> approved; immutable is the container lock), containers own
+	// -> approved -> immutable -> superseded; immutable is the container
+	// lock, superseded the terminal retirement), containers own
 	// container-state (active -> completed, gated on the all-done
-	// membership rule).
+	// membership rule), knowledge artifacts own content-state (the
+	// content-maturity lifecycle of the type's variant). Disambiguation
+	// is by target type: "approved" is a planning-state destination on
+	// plan- and a content-state destination on knowledge artifacts, and
+	// the target type selects the domain. plan- keeps planning-state as
+	// its sole transition domain (it carries the container-lock
+	// semantics); the plan's own content-state is out of scope for the
+	// transition API (planning-state approval expresses plan
+	// commitment).
 	typeWord := "work item"
 	stateDomain := conformance.DomainExecutionState
 	switch ref.Type {
@@ -255,6 +269,11 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 	case "ctr":
 		typeWord = "container"
 		stateDomain = conformance.DomainContainerState
+	default:
+		if ownsContentState(ref.Type) {
+			typeWord = "artifact"
+			stateDomain = conformance.DomainContentState
+		}
 	}
 
 	// The current state: the highest instance of the line (the line is
@@ -283,6 +302,8 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 		from = current.StateVector.PlanningState
 	case conformance.DomainContainerState:
 		from = current.StateVector.ContainerState
+	case conformance.DomainContentState:
+		from = current.StateVector.ContentState
 	}
 	if from == "" {
 		return nil, &TransitionRefusal{
@@ -291,13 +312,17 @@ func (AuthoringService) Transition(rt *Runtime, req TransitionRequest) (*Transit
 		}
 	}
 
-	// The planning-state / container-state branches (plan- and ctr-
-	// targets). Work items continue with the D1 pipeline below.
+	// The planning-state / container-state / content-state branches
+	// (plan-, ctr- and knowledge-artifact targets). Work items continue
+	// with the D1 pipeline below.
 	if ref.Type == "plan" {
 		return transitionPlanState(st, project, repo.Name, ref, current, from, req, byIdentity)
 	}
 	if ref.Type == "ctr" {
 		return transitionContainerState(st, project, repo.Name, ref, current, from, req, byIdentity)
+	}
+	if stateDomain == conformance.DomainContentState {
+		return transitionContentState(st, project, repo.Name, ref, current, from, req, byIdentity)
 	}
 
 	// Destination: explicit <to>, or the derived --forward/--backward
@@ -444,12 +469,16 @@ func legalTransitionsHint(from string) string {
 
 // transitionPlanState performs the planning-state branch of the
 // transition pipeline (plan- targets): the forward-only table is
-// draft -> approved. Planning-state immutable is the container lock
-// (protocol §4): it happens atomically with the container birth and
-// cannot be requested directly — approved -> immutable is refused with
-// the lock hint (explicit <to> and --forward alike). No note gates, no
-// active-container confirmation (plan and container transitions are
-// work-item-only gates).
+// draft -> approved -> immutable -> superseded. Planning-state immutable
+// is the container lock (protocol §4): it happens atomically with the
+// container birth and cannot be requested directly — approved ->
+// immutable is refused with the lock hint (explicit <to> and --forward
+// alike). Immutable -> superseded is the sanctioned retirement path:
+// a locked plan whose containers are all completed (none active) may be
+// archived without violating immutability — the transition appends a
+// change-log entry, never edits history. Superseded is terminal. No
+// note gates, no active-container confirmation (plan and container
+// transitions are work-item-only gates).
 func transitionPlanState(st *store.Store, project, sourceRepo string, ref conformance.Reference, current *exchange.Unit, from string, req TransitionRequest, byIdentity conformance.AuthorIdentity) (*TransitionResult, error) {
 	to := req.To
 	if req.Forward || req.Backward {
@@ -464,10 +493,12 @@ func transitionPlanState(st *store.Store, project, sourceRepo string, ref confor
 			to = "approved"
 		case "approved":
 			return nil, planLockRefusal()
-		default: // immutable: the lock is terminal, no forward step.
+		case "immutable":
+			to = "superseded"
+		default: // superseded: retirement is terminal, no forward step.
 			return nil, &TransitionRefusal{
 				Reason: fmt.Sprintf("there is no forward transition from %q in the planning-state table", from),
-				Hint:   "planning-state immutable is the container lock; it is terminal",
+				Hint:   "planning-state superseded is terminal (retired plans stay retired)",
 			}
 		}
 	}
@@ -475,6 +506,26 @@ func transitionPlanState(st *store.Store, project, sourceRepo string, ref confor
 	// refused with the lock hint even when requested explicitly.
 	if from == "approved" && to == "immutable" {
 		return nil, planLockRefusal()
+	}
+	// Retirement: immutable -> superseded, gated on no active container
+	// depending on the plan (the lock protects live executions).
+	if from == "immutable" && to == "superseded" {
+		planLine := ref.Namespace + "/" + ref.Type + ":" + ref.ID
+		offenders, ok := activeContainersForPlan(st, project, planLine)
+		if !ok {
+			return nil, &TransitionRefusal{
+				Reason: "cannot read the project's containers: the retirement gate could not be evaluated",
+				Hint:   "run 'eka sync' first and retry the retirement",
+			}
+		}
+		if len(offenders) > 0 {
+			return nil, &TransitionRefusal{
+				Reason: fmt.Sprintf("plan %s cannot retire: %d active container(s) still derive from it: %s",
+					planLine, len(offenders), strings.Join(offenders, ", ")),
+				Hint: "transition the active containers to completed first",
+			}
+		}
+		return publishStateTransition(st, project, sourceRepo, current, from, to, conformance.DomainPlanningState, byIdentity)
 	}
 	if !(from == "draft" && to == "approved") {
 		return nil, &TransitionRefusal{
@@ -489,9 +540,13 @@ func transitionPlanState(st *store.Store, project, sourceRepo string, ref confor
 // transition pipeline (ctr- targets) — the three-state table
 // planned -> active -> completed (Option B):
 //
-//   - ACTIVATION (planned -> active), gated on the exactly-one-active
-//     rule (protocol §3: no OTHER container line may be active) and on
-//     the plan-approval rule (the depends-on plan must be approved);
+//   - ACTIVATION (planned -> active), gated on the one-active-per-
+//     source_repo rule (dec:parallel-container-execution: no OTHER
+//     ACTIVE container may share this container's source_repo) plus
+//     the transitive depends-on/derives-from plan-closure disjointness
+//     gate across active containers of other repositories (a shared
+//     node names the shared plan/edge), and on the plan-approval rule
+//     (the depends-on plan must be approved);
 //     the activation LOCKS the plan (planning-state -> immutable,
 //     protocol §4 lock-atomic-with-generation) atomically with the
 //     activation — one store transaction, so the active container and
@@ -550,24 +605,75 @@ func transitionContainerState(st *store.Store, project, sourceRepo string, ref c
 	// plan-approval gate; the plan lock lands atomically with the
 	// activation (store.PutUnits on the lockPlanPuts batch).
 	if from == "planned" {
-		// Gate (protocol §3): exactly one container may be active at a
-		// time — a planned container activates only when no OTHER
-		// container line is active. The smallest canonical form of the
-		// active offender is named (deterministic). A store read
-		// failure refuses closed: an activation whose project cannot be
+		// Gate (protocol §3): one active container per source_repo —
+		// a planned container activates only when no OTHER container
+		// line of the SAME source_repo is active, and every active
+		// container of a DIFFERENT source_repo has a disjoint
+		// transitive plan closure (depends-on/derives-from closure
+		// over plan lines). The smallest canonical form of an active
+		// offender is named (deterministic). A store read failure
+		// refuses closed: an activation whose project cannot be
 		// scanned never proceeds.
-		other, ok := otherActiveContainer(st, project, ref)
+		others, ok := otherActiveContainers(st, project, ref)
 		if !ok {
 			return nil, &TransitionRefusal{
-				Reason: "cannot read the project's containers: the exactly-one-active gate (protocol §3) could not be evaluated",
+				Reason: "cannot read the project's containers: the active-container gate (dec:parallel-container-execution) could not be evaluated",
 				Hint:   "run 'eka sync' first and retry the activation",
 			}
 		}
-		if other != "" {
+		var sameRepo, crossRepo []activeContainer
+		for _, ac := range others {
+			if ac.SourceRepo == sourceRepo {
+				sameRepo = append(sameRepo, ac)
+			} else {
+				crossRepo = append(crossRepo, ac)
+			}
+		}
+		sort.Slice(sameRepo, func(i, j int) bool { return sameRepo[i].Line < sameRepo[j].Line })
+		if len(sameRepo) > 0 {
 			return nil, &TransitionRefusal{
 				Reason: fmt.Sprintf("another container %s is active; activate %s only after it completes",
-					other, ref.Namespace+"/"+ref.Type+":"+ref.ID),
-				Hint: "eka transition ctr:" + containerBareID(other) + " completed",
+					sameRepo[0].Line, ref.Namespace+"/"+ref.Type+":"+ref.ID),
+				Hint: "eka transition ctr:" + containerBareID(sameRepo[0].Line) + " completed",
+			}
+		}
+		if len(crossRepo) > 0 {
+			// Cross-repo activation is legal only when the transitive
+			// plan closure of the target container does not intersect
+			// the transitive plan closure of any OTHER active
+			// container (depends-on/derives-from closure over plan
+			// lines). A shared node refuses, naming the offending
+			// plan and the container it blocks.
+			targetClosure, err := planClosure(st, project, current)
+			if err != nil {
+				return nil, &TransitionRefusal{
+					Reason: fmt.Sprintf("cannot read the plan closure of %s: %v", ref.Namespace+"/"+ref.Type+":"+ref.ID, err),
+					Hint:   "run 'eka sync' first and retry the activation",
+				}
+			}
+			for _, ac := range crossRepo {
+				otherClosure, err := planClosure(st, project, ac.Unit)
+				if err != nil {
+					return nil, &TransitionRefusal{
+						Reason: fmt.Sprintf("cannot read the plan closure of %s: %v", ac.Line, err),
+						Hint:   "run 'eka sync' first and retry the activation",
+					}
+				}
+				var shared []string
+				for line := range targetClosure {
+					if otherClosure[line] {
+						shared = append(shared, line)
+					}
+				}
+				if len(shared) > 0 {
+					sort.Strings(shared)
+					return nil, &TransitionRefusal{
+						Reason: fmt.Sprintf("cannot activate %s: the transitive plan closure shares %s with the active container %s",
+							ref.Namespace+"/"+ref.Type+":"+ref.ID, shared[0], ac.Line),
+						Hint: fmt.Sprintf("disjoint the plan closures of %s and %s, or wait for %s to complete",
+							ref.Namespace+"/"+ref.Type+":"+ref.ID, ac.Line, containerBareID(ac.Line)),
+					}
+				}
 			}
 		}
 
@@ -629,41 +735,257 @@ func transitionContainerState(st *store.Store, project, sourceRepo string, ref c
 	return publishStateTransition(st, project, sourceRepo, current, from, to, conformance.DomainContainerState, byIdentity)
 }
 
-// otherActiveContainer returns the canonical line form of the smallest
-// OTHER active container line of the project (highest instance per
-// line — the byLine pattern of containerWorkItems; the target's own
-// line never counts against itself), or "" when no other container is
-// active. ok=false when the store cannot be read — the conservative
-// answer: the exactly-one-active gate fails closed on unreadable
-// projects.
-func otherActiveContainer(st *store.Store, project string, target conformance.Reference) (other string, ok bool) {
+// transitionContentState performs the content-state branch of the
+// transition pipeline (knowledge-artifact targets — every type that
+// owns content-state per Rule 4 except plan-, which keeps planning-state
+// as its transition domain): the content-maturity lifecycle of the
+// type's variant (standard draft -> review -> approved -> amended; ADR
+// proposed -> accepted -> superseded; decision draft -> accepted ->
+// superseded — conformance/state.go, the single source of the value
+// sets). The explicit table is the immediate next step of the variant
+// only (steps, not skips — the same convention as the plan and
+// container branches): a skip (e.g. draft -> approved on the standard
+// variant) is refused with the table message; a revert, a no-op or an
+// unknown destination refuses as forward-only (the same distinction the
+// container branch makes); terminal states (amended / superseded)
+// refuse everything. Forward-only: --backward refuses. Superseding an
+// ADR is gated on conformance R9: a replacement must reference the ADR
+// via `supersedes`. No note gates, no active-container confirmation
+// (those are work-item-only gates).
+func transitionContentState(st *store.Store, project, sourceRepo string, ref conformance.Reference, current *exchange.Unit, from string, req TransitionRequest, byIdentity conformance.AuthorIdentity) (*TransitionResult, error) {
+	values := conformance.DomainValues(conformance.DomainContentState, ref.Type)
+	to := req.To
+	if req.Forward || req.Backward {
+		if req.Backward {
+			return nil, &TransitionRefusal{
+				Reason: "content-state is forward-only",
+				Hint:   legalContentTransitionsHint(from, values),
+			}
+		}
+		if idx := valueIndex(values, from); idx < 0 || idx+1 >= len(values) {
+			return nil, &TransitionRefusal{
+				Reason: fmt.Sprintf("there is no forward transition from %q in the content-state table", from),
+				Hint:   legalContentTransitionsHint(from, values),
+			}
+		} else {
+			to = values[idx+1]
+		}
+	}
+	// The explicit table: from -> the immediate next value of the
+	// variant. A terminal state has no next value; a destination not
+	// ahead of the current value (a revert or a no-op) refuses as
+	// forward-only; an unknown value refuses with the table message.
+	fromIdx, toIdx := valueIndex(values, from), valueIndex(values, to)
+	if !(fromIdx >= 0 && toIdx == fromIdx+1) {
+		if fromIdx >= 0 && fromIdx == len(values)-1 {
+			return nil, &TransitionRefusal{
+				Reason: fmt.Sprintf("%s is terminal", from),
+				Hint:   legalContentTransitionsHint(from, values),
+			}
+		}
+		hint := legalContentTransitionsHint(from, values)
+		if toIdx < 0 {
+			return nil, &TransitionRefusal{
+				Reason: fmt.Sprintf("transition %s -> %s is not in the content-state table", from, to),
+				Hint:   hint,
+			}
+		}
+		if toIdx <= fromIdx {
+			return nil, &TransitionRefusal{
+				Reason: "content-state is forward-only",
+				Hint:   hint,
+			}
+		}
+		return nil, &TransitionRefusal{
+			Reason: fmt.Sprintf("transition %s -> %s is not in the content-state table", from, to),
+			Hint:   hint,
+		}
+	}
+
+	// Gate (conformance R9): a superseded ADR must be referenced by a
+	// replacement via `supersedes` — evaluated over the published units
+	// of the project (the successor set; a draft successor does not
+	// count until published). decision- supersession carries no gate
+	// (R9 applies to adr- only).
+	if ref.Type == "adr" && to == "superseded" && !hasSuperseder(st, project, ref, current.Identity.InstanceVersion) {
+		return nil, &TransitionRefusal{
+			Reason: fmt.Sprintf("transition gate R9: superseded ADR %s must be referenced by a replacement via `supersedes`",
+				ref.Namespace+"/"+ref.Type+":"+ref.ID),
+			Hint: "create the successor ADR with --supersedes <this target> and publish it first",
+		}
+	}
+	return publishStateTransition(st, project, sourceRepo, current, from, to, conformance.DomainContentState, byIdentity)
+}
+
+// ownsContentState reports whether the type token owns the
+// content-state domain (Rule 4): the knowledge artifacts plus rvw- and
+// cmt-. plan- also owns content-state but its transition domain is
+// planning-state (the dispatch never routes plan- here).
+func ownsContentState(typeToken string) bool {
+	for _, d := range conformance.OwnedDomains(typeToken) {
+		if d == conformance.DomainContentState {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSuperseder reports whether any OTHER unit of the project
+// references the target line via a `supersedes` relationship — the
+// conformance R9 replacement rule, evaluated over the workspace store
+// (the published successor set), mirroring the exact-instance
+// semantics of the conformance engine (rules.go R9): a versioned
+// reference counts only when its version equals the target's current
+// instance version; an unversioned reference always counts; the
+// target's own unit never counts against itself (b == a parity). A
+// store read failure is conservative: it never confirms a replacement.
+func hasSuperseder(st *store.Store, project string, target conformance.Reference, instanceVersion int) bool {
 	units, err := st.UnitsByProject(project)
 	if err != nil {
-		return "", false
+		return false
+	}
+	targetLine := target.Namespace + "/" + target.Type + ":" + target.ID
+	for _, u := range units {
+		if u.Identity.Namespace == target.Namespace && u.Identity.Type == target.Type &&
+			u.Identity.ID == target.ID && u.Identity.InstanceVersion == instanceVersion {
+			continue // The target's own current instance never supersedes itself.
+		}
+		for _, rel := range u.Relationships {
+			if rel.Type != "supersedes" {
+				continue
+			}
+			ref, err := conformance.ParseReference(rel.Target, u.Identity.Namespace, u.Identity.Type)
+			if err != nil {
+				continue
+			}
+			if ref.Namespace+"/"+ref.Type+":"+ref.ID != targetLine {
+				continue
+			}
+			if ref.HasVersion && ref.Version != instanceVersion {
+				continue // A successor may only supersede the exact instance it replaces.
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// activeContainer is one ACTIVE container of the project with its
+// provenance source_repo, evaluated by the one-active-container-per-
+// source_repo gate.
+type activeContainer struct {
+	Line       string
+	SourceRepo string
+	Unit       *exchange.Unit
+}
+
+// otherActiveContainers returns every ACTIVE container line of the
+// project except the target's own (highest instance per line — the
+// byLine pattern of containerWorkItems), each attributed to the
+// source_repo of its current instance, sorted by line form. ok=false
+// when the store cannot be read — the conservative answer: the
+// active-container gate fails closed on unreadable projects.
+func otherActiveContainers(st *store.Store, project string, target conformance.Reference) ([]activeContainer, bool) {
+	refs, err := st.RefsByProject(project)
+	if err != nil {
+		return nil, false
 	}
 	byLine := map[string]*exchange.Unit{}
-	for _, u := range units {
-		if u.Identity.Type != "ctr" {
+	repoByLine := map[string]string{}
+	for _, r := range refs {
+		if r.Type != "ctr" {
 			continue
 		}
-		key := u.Identity.Namespace + "/" + u.Identity.Type + ":" + u.Identity.ID
-		if cur, exists := byLine[key]; !exists || u.Identity.InstanceVersion > cur.Identity.InstanceVersion {
+		u, found, err := st.Unit(r.Form)
+		if err != nil {
+			return nil, false
+		}
+		if !found {
+			return nil, false
+		}
+		key := r.Namespace + "/" + r.Type + ":" + r.ID
+		cur := byLine[key]
+		if cur == nil ||
+			u.Identity.InstanceVersion > cur.Identity.InstanceVersion ||
+			(u.Identity.InstanceVersion == cur.Identity.InstanceVersion && r.SourceRepo < repoByLine[key]) {
 			byLine[key] = u
+			repoByLine[key] = r.SourceRepo
 		}
 	}
 	targetLine := target.Namespace + "/" + target.Type + ":" + target.ID
-	var active []string
+	var out []activeContainer
 	for line, u := range byLine {
 		if line != targetLine && u.StateVector.ContainerState == "active" {
-			active = append(active, line)
+			out = append(out, activeContainer{Line: line, SourceRepo: repoByLine[line], Unit: u})
 		}
 	}
-	if len(active) == 0 {
-		return "", true
-	}
-	sort.Strings(active)
-	return active[0], true
+	sort.Slice(out, func(i, j int) bool { return out[i].Line < out[j].Line })
+	return out, true
 }
+
+// planClosure computes the transitive depends-on/derives-from closure
+// of the relationship targets reachable from the container's
+// depends-on plan line, over the published units of the project
+// (highest instance per line, the resolver default). The plan line
+// itself is in the closure. The walk is cycle-safe (the visited set
+// short-circuits) and follows every depends-on/derives-from target —
+// plans, decisions, requirements: any shared node between two active
+// containers is a dependency intersection and refuses the activation.
+// Missing lines are tolerated: the closure still records the
+// unresolved reference (the store is the publisher's declared
+// dependency space whether or not the dependency has been pushed yet;
+// unknown lines never block another container because no other
+// container can share them transitively).
+func planClosure(st *store.Store, project string, ctr *exchange.Unit) (map[string]bool, error) {
+	ref, err := resolveDependsOnPlan(ctr)
+	if err != nil {
+		return nil, err
+	}
+	closure := map[string]bool{}
+	queue := []string{ref.Namespace + "/plan:" + ref.ID}
+	for len(queue) > 0 {
+		line := queue[0]
+		queue = queue[1:]
+		if closure[line] {
+			continue
+		}
+		closure[line] = true
+		lineUnits, err := st.UnitsByLine(identityNamespace(line), identityType(line), identityID(line))
+		if err != nil {
+			return nil, err
+		}
+		var latest *exchange.Unit
+		for _, u := range lineUnits {
+			if latest == nil || u.Identity.InstanceVersion > latest.Identity.InstanceVersion {
+				latest = u
+			}
+		}
+		if latest == nil {
+			continue
+		}
+		for _, rel := range latest.Relationships {
+			if rel.Type != "depends-on" && rel.Type != "derives-from" {
+				continue
+			}
+			tref, perr := conformance.ParseReference(rel.Target, latest.Identity.Namespace, latest.Identity.Type)
+			if perr != nil {
+				continue
+			}
+			line := tref.Namespace + "/" + tref.Type + ":" + tref.ID
+			if !closure[line] {
+				queue = append(queue, line)
+			}
+		}
+	}
+	return closure, nil
+}
+
+func identityNamespace(line string) string { return strings.SplitN(line, "/", 2)[0] }
+func identityType(line string) string {
+	rest := line[strings.IndexByte(line, '/')+1:]
+	return rest[:strings.IndexByte(rest, ':')]
+}
+func identityID(line string) string { return line[strings.LastIndexByte(line, ':')+1:] }
 
 // containerBareID extracts the bare id of a canonical line form
 // ("<ns>/ctr:<id>" -> "<id>") for the deterministic completion hint.
@@ -687,15 +1009,54 @@ func planLockRefusal() *TransitionRefusal {
 
 // legalPlanningTransitionsHint renders the planning-state destinations
 // of a state for the refusal hint (the forward-only table draft ->
-// approved; immutable is the container lock).
+// approved -> immutable -> superseded; immutable is the container lock,
+// superseded is the terminal retirement).
 func legalPlanningTransitionsHint(from string) string {
 	switch from {
 	case "draft":
 		return `legal transitions from "draft": approved`
 	case "approved":
 		return planLockRefusal().Reason
+	case "immutable":
+		return `legal transitions from "immutable": superseded (retirement; gated on no active container deriving from the plan)`
 	}
-	return `no legal transition from "immutable" (immutable is the container lock; it is terminal)`
+	return `no legal transition from "superseded" (retired plans stay retired)`
+}
+
+// activeContainersForPlan lists the canonical line forms of the project's
+// containers that are active and derive from the given plan line
+// ("<ns>/plan:<id>"), sorted. ok=false when the project cannot be
+// scanned (refuse closed). Containers whose plan reference cannot be
+// resolved are skipped: they cannot be shown to derive from this plan.
+func activeContainersForPlan(st *store.Store, project, planLine string) (offenders []string, ok bool) {
+	units, err := st.UnitsByProject(project)
+	if err != nil {
+		return nil, false
+	}
+	byLine := map[string]*exchange.Unit{}
+	for _, u := range units {
+		if u.Identity.Type != "ctr" {
+			continue
+		}
+		key := u.Identity.Namespace + "/" + u.Identity.Type + ":" + u.Identity.ID
+		if cur, exists := byLine[key]; !exists || u.Identity.InstanceVersion > cur.Identity.InstanceVersion {
+			byLine[key] = u
+		}
+	}
+	for line, u := range byLine {
+		if u.StateVector.ContainerState != "active" {
+			continue
+		}
+		planRef, err := resolveDependsOnPlan(u)
+		if err != nil {
+			continue
+		}
+		if planRef.Namespace+"/plan:"+planRef.ID == planLine {
+			offenders = append(offenders, line)
+		}
+	}
+	sort.Strings(offenders)
+	return offenders, true
 }
 
 // legalContainerTransitionsHint renders the container-state
@@ -709,6 +1070,16 @@ func legalContainerTransitionsHint(from string) string {
 		return `legal transitions from "active": completed`
 	}
 	return `no legal transition from "completed" (completed is terminal)`
+}
+
+// legalContentTransitionsHint renders the content-state destinations of
+// a state for the refusal hint: the immediate next step of the type's
+// variant table (steps, not skips), or the terminal notice.
+func legalContentTransitionsHint(from string, values []string) string {
+	if idx := valueIndex(values, from); idx >= 0 && idx+1 < len(values) {
+		return fmt.Sprintf("legal transitions from %q: %s", from, values[idx+1])
+	}
+	return fmt.Sprintf("no legal transition from %q (%s is terminal)", from, from)
 }
 
 // valueIndex returns the position of v in values, or -1.
@@ -730,6 +1101,8 @@ func publishStateTransition(st *store.Store, project, sourceRepo string, current
 	today := time.Now().Format("2006-01-02")
 	next := *current // shallow copy; the mutable slices below are rebuilt.
 	switch domain {
+	case conformance.DomainContentState:
+		next.StateVector.ContentState = to
 	case conformance.DomainPlanningState:
 		next.StateVector.PlanningState = to
 	case conformance.DomainContainerState:

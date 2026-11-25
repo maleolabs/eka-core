@@ -1,0 +1,4 @@
+version: 1
+project: eka-envelope-fixture
+name: envelope
+namespace: eka-envelope-fixture

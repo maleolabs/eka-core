@@ -189,6 +189,7 @@ func TestTransitionPlanRefusals(t *testing.T) {
 	putUnit(t, r, planUnit("roadmap-v1", 1, "approved", planLog("approved")), project, "repo")
 	putUnit(t, r, planUnit("roadmap-v2", 1, "draft", planLog("draft")), project, "repo")
 	putUnit(t, r, planUnit("locked", 1, "immutable", planLog("immutable")), project, "repo")
+	putUnit(t, r, planUnit("retired", 1, "superseded", planLog("superseded")), project, "repo")
 
 	cases := []struct {
 		name string
@@ -200,7 +201,10 @@ func TestTransitionPlanRefusals(t *testing.T) {
 		{"backward", TransitionRequest{Target: "plan:roadmap-v1", Backward: true}, "planning-state is forward-only"},
 		{"explicit immutable from draft", TransitionRequest{Target: "plan:roadmap-v2", To: "immutable"}, "is not in the planning-state table"},
 		{"no-op approved", TransitionRequest{Target: "plan:roadmap-v1", To: "approved"}, "is not in the planning-state table"},
-		{"forward from immutable", TransitionRequest{Target: "plan:locked", Forward: true}, "no forward transition"},
+		{"explicit superseded from draft", TransitionRequest{Target: "plan:roadmap-v2", To: "superseded"}, "is not in the planning-state table"},
+		{"explicit superseded from approved", TransitionRequest{Target: "plan:roadmap-v1", To: "superseded"}, "is not in the planning-state table"},
+		{"forward from superseded", TransitionRequest{Target: "plan:retired", Forward: true}, "no forward transition"},
+		{"explicit approved from superseded", TransitionRequest{Target: "plan:retired", To: "approved"}, "is not in the planning-state table"},
 		{"to approved from immutable", TransitionRequest{Target: "plan:locked", To: "approved"}, "is not in the planning-state table"},
 	}
 	for _, c := range cases {
@@ -226,6 +230,99 @@ func TestTransitionPlanRefusals(t *testing.T) {
 	// Nothing was published by the refusals: the plan is still approved.
 	if state, _ := planState(t, r, "roadmap-v1"); state != "approved" {
 		t.Errorf("planning-state = %q, want approved (refused runs publish nothing)", state)
+	}
+}
+
+// TestTransitionPlanRetirement: immutable -> superseded retires a locked
+// plan through the explicit <to> and through --forward; the change-log
+// entry is appended and the line re-points in place. Superseded is
+// terminal.
+func TestTransitionPlanRetirement(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("locked", 1, "immutable", planLog("immutable")), project, "repo")
+
+	res, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "plan:locked", To: "superseded", By: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("explicit retirement: %v", err)
+	}
+	if res.From != "immutable" || res.To != "superseded" {
+		t.Errorf("result = %+v, want immutable -> superseded", res)
+	}
+	state, logLen := planState(t, r, "locked")
+	if state != "superseded" || logLen != 4 {
+		t.Errorf("planning-state = %q with %d entries, want superseded with 4", state, logLen)
+	}
+
+	// --forward from immutable retires too.
+	putUnit(t, r, planUnit("locked-2", 1, "immutable", planLog("immutable")), project, "repo")
+	res, err = Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "plan:locked-2", Forward: true, By: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("forward retirement: %v", err)
+	}
+	if res.From != "immutable" || res.To != "superseded" {
+		t.Errorf("result = %+v, want immutable -> superseded", res)
+	}
+}
+
+// TestTransitionPlanRetirementGated: a plan with an active container
+// deriving from it cannot retire; once the container completes, the
+// retirement proceeds.
+func TestTransitionPlanRetirementGated(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "immutable", planLog("immutable")), project, "repo")
+	active := plannedCtr("wave-7", "roadmap-v1")
+	active.StateVector.ContainerState = "active"
+	putUnit(t, r, active, project, "repo")
+
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "plan:roadmap-v1", To: "superseded", By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("retirement with active container: err = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Error(), "test-ns/ctr:wave-7") {
+		t.Errorf("refusal = %q, want it to name the active container", refusal.Error())
+	}
+	if state, _ := planState(t, r, "roadmap-v1"); state != "immutable" {
+		t.Errorf("planning-state = %q, want immutable (refused runs publish nothing)", state)
+	}
+
+	// A completed container no longer blocks the retirement.
+	putUnit(t, r, planUnit("roadmap-v2", 1, "immutable", planLog("immutable")), project, "repo")
+	doneCtr := plannedCtr("wave-8", "roadmap-v2")
+	doneCtr.StateVector.ContainerState = "completed"
+	putUnit(t, r, doneCtr, project, "repo")
+	if _, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "plan:roadmap-v2", To: "superseded", By: "test-agent",
+	}); err != nil {
+		t.Fatalf("retirement with only completed containers: %v", err)
+	}
+	if state, _ := planState(t, r, "roadmap-v2"); state != "superseded" {
+		t.Errorf("planning-state = %q, want superseded", state)
+	}
+}
+
+// TestTransitionContainerActivationRefusedSupersededPlan: no new
+// container may activate deriving from a retired plan.
+func TestTransitionContainerActivationRefusedSupersededPlan(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "superseded", planLog("superseded")), project, "repo")
+	putUnit(t, r, plannedCtr("wave-9", "roadmap-v1"), project, "repo")
+
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-9", Forward: true, By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("activation on retired plan: err = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Error(), "retired") {
+		t.Errorf("refusal = %q, want the retirement message", refusal.Error())
 	}
 }
 
@@ -577,5 +674,253 @@ func TestTransitionContainerActivationTableRefusals(t *testing.T) {
 	}
 	if state, _ := containerState(t, r, "wave-7"); state != "planned" {
 		t.Errorf("container-state = %q, want planned (refused runs publish nothing)", state)
+	}
+}
+
+// TestTransitionContainerActivationParallelDisjoint: the protocol §3
+// scope-aware gate — an active container in a DIFFERENT source_repo
+// whose plan closure is disjoint does NOT block a second activation:
+// both reach active (one active container per source_repo).
+func TestTransitionContainerActivationParallelDisjoint(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "approved", planLog("approved")), project, "repo")
+	putUnit(t, r, plannedCtr("wave-7", "roadmap-v1"), project, "repo")
+	// An already-active container born in another repo (repo-b) with an
+	// independent plan closure.
+	other := plannedCtr("wave-6", "roadmap-v2")
+	other.StateVector = exchange.StateVector{ContainerState: "active", ExistenceState: "active"}
+	other.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-05", Domain: "container-state", From: "-", To: "active", By: conformance.User("Eng")},
+		{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Eng")},
+	}
+	putUnit(t, r, other, project, "repo-b")
+	putUnit(t, r, planUnit("roadmap-v2", 1, "approved", planLog("approved")), project, "repo-b")
+
+	res, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-7", To: "active", By: "test-agent",
+	})
+	if err != nil {
+		t.Fatalf("activation with a disjoint cross-repo active = %v, want success", err)
+	}
+	if res.Target != "test-ns/ctr:wave-7" || res.To != "active" {
+		t.Errorf("result = %+v, want test-ns/ctr:wave-7 -> active", res)
+	}
+	if state, _ := containerState(t, r, "wave-7"); state != "active" {
+		t.Errorf("container-state = %q, want active (parallel activation allowed)", state)
+	}
+}
+
+// TestTransitionContainerActivationParallelSharedClosure: the
+// transitive dependency gate — an active container in a DIFFERENT
+// source_repo whose transitive plan closure shares a node (here the
+// plan of the target, via wave-6's depends-on roadmap-v1) refuses the
+// activation naming the shared plan; nothing publishes.
+func TestTransitionContainerActivationParallelSharedClosure(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "approved", planLog("approved")), project, "repo")
+	putUnit(t, r, plannedCtr("wave-7", "roadmap-v1"), project, "repo")
+	// An active container in repo-b that depends on the SAME plan.
+	other := plannedCtr("wave-6", "roadmap-v1")
+	other.StateVector = exchange.StateVector{ContainerState: "active", ExistenceState: "active"}
+	other.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-05", Domain: "container-state", From: "-", To: "active", By: conformance.User("Eng")},
+		{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Eng")},
+	}
+	putUnit(t, r, other, project, "repo-b")
+
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-7", To: "active", By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("activation with a shared plan closure = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Reason, "shares test-ns/plan:roadmap-v1 with the active container test-ns/ctr:wave-6") {
+		t.Errorf("reason = %q, want the shared-closure refusal naming the shared plan and the active container", refusal.Reason)
+	}
+	if state, _ := containerState(t, r, "wave-7"); state != "planned" {
+		t.Errorf("container-state = %q, want planned (refused runs publish nothing)", state)
+	}
+}
+
+// TestTransitionContainerActivationParallelSharedTransitiveClosure: a
+// shared node two hops away (plan-b depends-on plan-a, wave-6 depends-on
+// plan-b) still refuses — the closure is transitive, not just the
+// direct depends-on plan of the other container.
+func TestTransitionContainerActivationParallelSharedTransitiveClosure(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "approved", planLog("approved")), project, "repo")
+	putUnit(t, r, plannedCtr("wave-7", "roadmap-v1"), project, "repo")
+	// repo-b: wave-6 depends on roadmap-b which derives-from roadmap-v1
+	// (the target's plan) — the shared node is discovered transitively.
+	putUnit(t, r, planUnit("roadmap-b", 1, "approved", planLog("approved")), project, "repo-b")
+	putUnit(t, r, planUnit("roadmap-v1", 1, "approved", planLog("approved")), project, "repo-b")
+	other := plannedCtr("wave-6", "roadmap-b")
+	other.StateVector = exchange.StateVector{ContainerState: "active", ExistenceState: "active"}
+	other.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-05", Domain: "container-state", From: "-", To: "active", By: conformance.User("Eng")},
+		{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Eng")},
+	}
+	putUnit(t, r, other, project, "repo-b")
+
+	// roadmap-b derives-from roadmap-v1 — the transitive edge.
+	rb := planUnit("roadmap-b", 1, "approved", planLog("approved"))
+	rb.Relationships = []exchange.Relationship{{Type: "derives-from", Target: "test-ns/plan:roadmap-v1"}}
+	putUnit(t, r, rb, project, "repo-b")
+
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-7", To: "active", By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("activation with a shared transitive plan closure = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Reason, "shares test-ns/plan:roadmap-v1 with the active container test-ns/ctr:wave-6") {
+		t.Errorf("reason = %q, want the shared-closure refusal naming the shared plan", refusal.Reason)
+	}
+}
+
+// TestTransitionContainerActivationParallelCycleSafe: a cyclic plan
+// closure (plan-a depends-on plan-b, plan-b depends-on plan-a) does not
+// loop the closure walk — activation proceeds when the closures are
+// otherwise disjoint.
+func TestTransitionContainerActivationParallelCycleSafe(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-cyc-a", 1, "approved", planLog("approved")), project, "repo")
+	putUnit(t, r, plannedCtr("wave-7", "roadmap-cyc-a"), project, "repo")
+
+	// Cycle between roadmap-cyc-a and roadmap-cyc-b in repo-b, with an
+	// active container on roadmap-cyc-b.
+	pa := planUnit("roadmap-cyc-a", 1, "approved", planLog("approved"))
+	pa.Relationships = []exchange.Relationship{{Type: "depends-on", Target: "test-ns/plan:roadmap-cyc-b"}}
+	putUnit(t, r, pa, project, "repo-b")
+	pb := planUnit("roadmap-cyc-b", 1, "approved", planLog("approved"))
+	pb.Relationships = []exchange.Relationship{{Type: "depends-on", Target: "test-ns/plan:roadmap-cyc-a"}}
+	putUnit(t, r, pb, project, "repo-b")
+	other := plannedCtr("wave-6", "roadmap-cyc-b")
+	other.StateVector = exchange.StateVector{ContainerState: "active", ExistenceState: "active"}
+	other.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-05", Domain: "container-state", From: "-", To: "active", By: conformance.User("Eng")},
+		{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Eng")},
+	}
+	putUnit(t, r, other, project, "repo-b")
+
+	// The cycle intersects the target's closure (roadmap-cyc-a is in
+	// both), so the activation must REFUSE — but the walk must not hang.
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-7", To: "active", By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("activation with a cyclic shared closure = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Reason, "shares test-ns/plan:roadmap-cyc-a") {
+		t.Errorf("reason = %q, want the shared-closure refusal naming the cyclic shared plan", refusal.Reason)
+	}
+}
+
+// TestTransitionPlanRetirementScopeAware: the retirement gate is
+// scope-aware (dec:parallel-container-execution) — an active container
+// in a DIFFERENT source_repo deriving from a DIFFERENT plan never
+// blocks the retirement of this plan; only active containers deriving
+// from THIS plan block it. (Multi-repo parallel execution must not
+// serialize plan retirement on unrelated work.)
+func TestTransitionPlanRetirementScopeAware(t *testing.T) {
+	r, project := transitionRuntime(t)
+	putUnit(t, r, planUnit("roadmap-v1", 1, "immutable", planLog("immutable")), project, "repo")
+	// An active container of THIS plan in the same repo (the blocker).
+	active := plannedCtr("wave-7", "roadmap-v1")
+	active.StateVector.ContainerState = "active"
+	putUnit(t, r, active, project, "repo")
+	// An active container in ANOTHER repo deriving from a DIFFERENT
+	// plan (the parallel execution that must not block this plan's
+	// retirement).
+	other := plannedCtr("wave-8", "roadmap-other")
+	other.StateVector.ContainerState = "active"
+	putUnit(t, r, other, project, "repo-b")
+
+	// The same-plan active container still blocks.
+	_, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "plan:roadmap-v1", To: "superseded", By: "test-agent",
+	})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("retirement while THIS plan's container is active = %v, want a TransitionRefusal", err)
+	}
+	if !strings.Contains(refusal.Error(), "wave-7") {
+		t.Errorf("refusal = %q, want it to name the same-plan active container (wave-7)", refusal.Error())
+	}
+	if strings.Contains(refusal.Error(), "wave-8") {
+		t.Errorf("refusal = %q, want ONLY the same-plan container (wave-7), never the unrelated wave-8", refusal.Error())
+	}
+
+	// Complete the same-plan container; the unrelated cross-repo
+	// active container must NOT block the retirement.
+	if _, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "ctr:wave-7", To: "completed", By: "test-agent",
+	}); err != nil {
+		t.Fatalf("complete wave-7: %v", err)
+	}
+	if _, err := Authoring.Transition(r, TransitionRequest{
+		RepoPath: ".", Target: "plan:roadmap-v1", To: "superseded", By: "test-agent",
+	}); err != nil {
+		t.Fatalf("retirement with only unrelated active containers: %v", err)
+	}
+	if state, _ := planState(t, r, "roadmap-v1"); state != "superseded" {
+		t.Errorf("planning-state = %q, want superseded (cross-repo active container must not block)", state)
+	}
+}
+
+// TestTransitionWorkItemConfirmationMultiActive: the work-item
+// active-container confirmation is scope-aware — a work item registered
+// in ANY active container (not only the lexicographically smallest)
+// passes the confirmation. The single-active refusal (unregistered
+// item) still applies.
+func TestTransitionWorkItemConfirmationMultiActive(t *testing.T) {
+	r, project := transitionRuntime(t)
+	// Two active containers in different repos (disjoint plans — the
+	// valid parallel state).
+	putUnit(t, r, planUnit("roadmap-a", 1, "immutable", planLog("immutable")), project, "repo")
+	putUnit(t, r, planUnit("roadmap-b", 1, "immutable", planLog("immutable")), project, "repo")
+	ctrA := plannedCtr("wave-a", "roadmap-a")
+	ctrA.StateVector.ContainerState = "active"
+	putUnit(t, r, ctrA, project, "repo")
+	ctrB := plannedCtr("wave-b", "roadmap-b")
+	ctrB.StateVector.ContainerState = "active"
+	putUnit(t, r, ctrB, project, "repo-b")
+
+	// A work item registered in the SECOND active container (wave-b)
+	// must be confirmed without --force — the confirmation resolves
+	// against every active container in scope.
+	sto := unit("test-ns", "sto", "item-b", 1, 1)
+	sto.StateVector = exchange.StateVector{ExecutionState: "todo", ExistenceState: "active"}
+	sto.ChangeLog = []exchange.ChangeLogEntry{
+		{Date: "2026-08-05", Domain: "execution-state", From: "-", To: "todo", By: conformance.User("Eng")},
+		{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Eng")},
+	}
+	putUnit(t, r, sto, project, "repo-b")
+	tkt := unit("test-ns", "tkt", "t-item-b", 1, 1)
+	tkt.StateVector = exchange.StateVector{}
+	tkt.Relationships = []exchange.Relationship{
+		{Type: "derives-from", Target: "test-ns/ctr:wave-b"},
+		{Type: "derives-from", Target: "test-ns/sto:item-b"},
+	}
+	putUnit(t, r, tkt, project, "repo-b")
+
+	req := TransitionRequest{RepoPath: ".", Target: "sto:item-b", To: "in-progress", By: "test-agent"}
+	_, err := Authoring.Transition(r, req)
+	if err != nil {
+		t.Fatalf("multi-active registered item must transition without confirmation: %v", err)
+	}
+
+	// An item registered in NO active container still refuses the
+	// pre-flight confirmation.
+	stoX := unit("test-ns", "sto", "item-x", 1, 1)
+	stoX.StateVector = exchange.StateVector{ExecutionState: "todo", ExistenceState: "active"}
+	putUnit(t, r, stoX, project, "repo")
+	_, err = Authoring.Transition(r, TransitionRequest{RepoPath: ".", Target: "sto:item-x", To: "in-progress", By: "test-agent"})
+	var refusal *TransitionRefusal
+	if !errors.As(err, &refusal) || !refusal.Confirmation {
+		t.Fatalf("unregistered item = %v, want the active-container confirmation refusal", err)
 	}
 }

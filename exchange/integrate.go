@@ -75,7 +75,7 @@ func folderForType(token string) string {
 		return "docs/quality"
 	case "scp", "epc", "plan", "trc":
 		return "docs/planning"
-	case "rel":
+	case "rel", "shr":
 		return "docs/records"
 	case "fnd":
 		return "docs/research"
@@ -99,6 +99,8 @@ func folderForType(token string) string {
 		return "docs/operating/sessions"
 	case "tkt":
 		return "docs/operating/projections"
+	case "cmt":
+		return "docs/operating/notes"
 	}
 	return ""
 }
@@ -176,20 +178,26 @@ func unitFilePath(u *Unit) (string, error) {
 // frontmatter is the deterministic YAML reconstruction of the unit
 // metadata. Field order is fixed (design decision 5): identity, revision,
 // owned state fields (declared domain order), classification, metadata,
-// relationship fields (declared order, only when non-empty), phase, change
-// log. yaml.v3 struct marshaling emits fields in declaration order — this
-// struct IS the serialization contract.
+// relationship fields (declared order, only when non-empty), phase, the
+// provenance capture envelope, the freshness dates, change log. yaml.v3
+// struct marshaling emits fields in declaration order — this struct IS the
+// serialization contract.
 type frontmatter struct {
-	Namespace           string                     `yaml:"namespace"`
-	Type                string                     `yaml:"type"`
-	ID                  string                     `yaml:"id"`
-	InstanceVersion     int                        `yaml:"instance-version"`
-	Revision            int                        `yaml:"revision"`
-	ContentState        string                     `yaml:"content-state,omitempty"`
-	ExecutionState      string                     `yaml:"execution-state,omitempty"`
-	PlanningState       string                     `yaml:"planning-state,omitempty"`
-	ContainerState      string                     `yaml:"container-state,omitempty"`
-	ExistenceState      string                     `yaml:"existence-state,omitempty"`
+	Namespace       string `yaml:"namespace"`
+	Type            string `yaml:"type"`
+	ID              string `yaml:"id"`
+	InstanceVersion int    `yaml:"instance-version"`
+	Revision        int    `yaml:"revision"`
+	ContentState    string `yaml:"content-state,omitempty"`
+	ExecutionState  string `yaml:"execution-state,omitempty"`
+	PlanningState   string `yaml:"planning-state,omitempty"`
+	ContainerState  string `yaml:"container-state,omitempty"`
+	ExistenceState  string `yaml:"existence-state,omitempty"`
+	// NoteState is the note-state domain owned by cmt- (ADR-019 D4); it
+	// sits after existence-state so the emitted field order is the
+	// declared domain order (stateFields), the same order the unit state
+	// vector carries.
+	NoteState           string                     `yaml:"note-state,omitempty"`
 	Dimension           string                     `yaml:"dimension,omitempty"`
 	DimensionsSecondary []string                   `yaml:"dimensions-secondary,omitempty"`
 	Author              conformance.AuthorIdentity `yaml:"author,omitempty"`
@@ -201,7 +209,29 @@ type frontmatter struct {
 	DependsOn           []string                   `yaml:"depends-on,omitempty"`
 	Validates           []string                   `yaml:"validates,omitempty"`
 	Phase               string                     `yaml:"phase,omitempty"`
-	ChangeLog           []fmChangeLogEntry         `yaml:"change-log,omitempty"`
+	Provenance          string                     `yaml:"provenance,omitempty"`
+	// The rest of the ADR-035 envelope. Every field is omitted unless the
+	// unit carries a real declaration (artifactConfidence,
+	// artifactCaptureMetaFor): writing a zero value would re-spell absence
+	// as a claim and change the bytes of every artifact that declared
+	// nothing.
+	SourcePromptHash string               `yaml:"sourcePromptHash,omitempty"`
+	Confidence       *float64             `yaml:"confidence,omitempty"`
+	SourceCommitSha  string               `yaml:"sourceCommitSha,omitempty"`
+	CaptureMeta      *artifactCaptureMeta `yaml:"captureMeta,omitempty"`
+	ValidUntil       string               `yaml:"validUntil,omitempty"`
+	LastConfirmed    string               `yaml:"lastConfirmed,omitempty"`
+	ChangeLog        []fmChangeLogEntry   `yaml:"change-log,omitempty"`
+}
+
+// artifactCaptureMeta is the captureMeta block as written into an artifact.
+// One type serves both renderers (YAML frontmatter and the JSON authoring
+// document): the reader validates one shape, so the writers must emit one
+// shape.
+type artifactCaptureMeta struct {
+	Classifier string `yaml:"classifier,omitempty" json:"classifier,omitempty"`
+	DedupeKey  string `yaml:"dedupeKey,omitempty" json:"dedupeKey,omitempty"`
+	Title      string `yaml:"title,omitempty" json:"title,omitempty"`
 }
 
 // fmChangeLogEntry is one change-log entry in the fixed YAML field order
@@ -214,11 +244,70 @@ type fmChangeLogEntry struct {
 	By     conformance.AuthorIdentity `yaml:"by"`
 }
 
+// artifactProvenance renders the provenance value to write into an
+// artifact's metadata, or "" when the artifact must not carry the field.
+//
+// The boundary is the absence contract: "human" is the default, so an
+// explicit `provenance: human` and an absent field are the same claim
+// (conformance.ValidProvenance, Unit.ToArtifact defaults "" to human) and
+// writing the default would make an imported artifact differ from its
+// source for no semantic gain. Only inferred/reconciled are declarations
+// that must survive; a value outside the enum is refused here, before the
+// write, because the reader would reject the artifact this renderer had
+// just produced — the failure belongs to the producer, not to the next
+// import.
+//
+// builder.go toUnit already normalises the default to absence, so the
+// "human" arm only fires for a package unit produced elsewhere (another
+// exporter, the runtime envelope) that spells the default out.
+func artifactProvenance(u *Unit) (string, error) {
+	switch u.Provenance {
+	case "", conformance.ProvenanceHuman:
+		return "", nil
+	case conformance.ProvenanceInferred, conformance.ProvenanceReconciled:
+		return u.Provenance, nil
+	}
+	return "", packageErrorf(
+		"import refused: unit %s declares provenance %q; the provenance enum is human|inferred|reconciled",
+		u.CanonicalIdentityForm, u.Provenance)
+}
+
+// artifactConfidence renders the confidence claim of a unit, or nil when
+// the unit declares none.
+//
+// The distinction is the whole point of HasConfidence: 0.0 is a legal claim
+// ("no confidence") and must round-trip, while an absent field means "the
+// source declared nothing". A unit built before the flag existed may carry a
+// non-zero value without it, so a non-zero Confidence is treated as a claim
+// too — dropping it would silently reset a real declaration.
+func artifactConfidence(u *Unit) *float64 {
+	if !u.HasConfidence && u.Confidence == 0 {
+		return nil
+	}
+	v := u.Confidence
+	return &v
+}
+
+// artifactCaptureMetaFor renders the captureMeta block of a unit, or nil
+// when it carries no capture metadata (a human-authored artifact). The
+// recorded title travels with the key it was computed from.
+func artifactCaptureMetaFor(u *Unit) *artifactCaptureMeta {
+	cm := u.CaptureMeta
+	if cm.Classifier == "" && cm.DedupeKey == "" && cm.Title == "" {
+		return nil
+	}
+	return &artifactCaptureMeta{Classifier: cm.Classifier, DedupeKey: cm.DedupeKey, Title: cm.Title}
+}
+
 // buildFrontmatter renders the deterministic YAML metadata block (without
 // the surrounding "---" delimiters) of one accepted unit. Relationship
 // targets are converted from canonical identity forms to repository
 // reference forms (design decision 4).
 func buildFrontmatter(u *Unit) (string, error) {
+	prov, err := artifactProvenance(u)
+	if err != nil {
+		return "", err
+	}
 	fm := frontmatter{
 		Namespace:       u.Identity.Namespace,
 		Type:            u.Identity.Type,
@@ -229,6 +318,17 @@ func buildFrontmatter(u *Unit) (string, error) {
 		Created:         u.Created,
 		Updated:         u.Updated,
 		Phase:           u.Phase,
+		// Provenance is written only when the unit carries a non-default
+		// value: the human default is the absence contract, so an artifact
+		// that declared nothing (or declared "human") must not gain the
+		// field.
+		Provenance:       prov,
+		SourcePromptHash: u.SourcePromptHash,
+		Confidence:       artifactConfidence(u),
+		SourceCommitSha:  u.SourceCommitSha,
+		CaptureMeta:      artifactCaptureMetaFor(u),
+		ValidUntil:       u.ValidUntil,
+		LastConfirmed:    u.LastConfirmed,
 	}
 	if u.StateVector.ContentState != "" {
 		fm.ContentState = u.StateVector.ContentState
@@ -244,6 +344,9 @@ func buildFrontmatter(u *Unit) (string, error) {
 	}
 	if u.StateVector.ExistenceState != "" {
 		fm.ExistenceState = u.StateVector.ExistenceState
+	}
+	if u.StateVector.NoteState != "" {
+		fm.NoteState = u.StateVector.NoteState
 	}
 	if u.Classification.Dimension != "" {
 		fm.Dimension = u.Classification.Dimension
@@ -419,7 +522,22 @@ type jsonAuthoring struct {
 	Phase               string                     `json:"phase,omitempty"`
 	Relationships       map[string][]string        `json:"relationships,omitempty"`
 	ChangeLog           []jsonChangeLogEntry       `json:"changeLog,omitempty"`
-	Content             json.RawMessage            `json:"content"`
+	// Provenance is the top-level capture field the JSON adapter reads
+	// (conformance.analyzeJSON); omitting it for a unit that carries one
+	// would silently reset the unit to the human default on the next
+	// export. Empty stays omitted (absence is the human default).
+	Provenance string `json:"provenance,omitempty"`
+	// The rest of the ADR-035 envelope, same absence contract as
+	// provenance: a field is written only when the unit carries a real
+	// declaration, so an artifact that declared nothing re-exports
+	// byte-identically.
+	SourcePromptHash string               `json:"sourcePromptHash,omitempty"`
+	Confidence       *float64             `json:"confidence,omitempty"`
+	SourceCommitSha  string               `json:"sourceCommitSha,omitempty"`
+	CaptureMeta      *artifactCaptureMeta `json:"captureMeta,omitempty"`
+	ValidUntil       string               `json:"validUntil,omitempty"`
+	LastConfirmed    string               `json:"lastConfirmed,omitempty"`
+	Content          json.RawMessage      `json:"content"`
 }
 
 // jsonChangeLogEntry is one change-log entry in the §3.2 spelling:
@@ -439,19 +557,30 @@ type jsonChangeLogEntry struct {
 // artifact by construction (same folder mapping, same identity fields,
 // camelCase domains converted back by the JSON adapter).
 func buildJSONAuthoring(u *Unit) ([]byte, error) {
+	prov, err := artifactProvenance(u)
+	if err != nil {
+		return nil, err
+	}
 	doc := jsonAuthoring{
-		Namespace:       u.Identity.Namespace,
-		Type:            u.Identity.Type,
-		ID:              u.Identity.ID,
-		InstanceVersion: u.Identity.InstanceVersion,
-		Revision:        u.Revision,
-		Author:          u.Author,
-		Created:         u.Created,
-		Updated:         u.Updated,
-		Dimension:       u.Classification.Dimension,
-		Domain:          u.Classification.Domain,
-		Phase:           u.Phase,
-		Content:         u.ContentPayload,
+		Namespace:        u.Identity.Namespace,
+		Type:             u.Identity.Type,
+		ID:               u.Identity.ID,
+		InstanceVersion:  u.Identity.InstanceVersion,
+		Revision:         u.Revision,
+		Author:           u.Author,
+		Created:          u.Created,
+		Updated:          u.Updated,
+		Dimension:        u.Classification.Dimension,
+		Domain:           u.Classification.Domain,
+		Phase:            u.Phase,
+		Provenance:       prov,
+		SourcePromptHash: u.SourcePromptHash,
+		Confidence:       artifactConfidence(u),
+		SourceCommitSha:  u.SourceCommitSha,
+		CaptureMeta:      artifactCaptureMetaFor(u),
+		ValidUntil:       u.ValidUntil,
+		LastConfirmed:    u.LastConfirmed,
+		Content:          u.ContentPayload,
 	}
 	if len(u.Classification.DimensionsSecondary) > 0 {
 		doc.DimensionsSecondary = u.Classification.DimensionsSecondary
@@ -471,6 +600,9 @@ func buildJSONAuthoring(u *Unit) ([]byte, error) {
 	}
 	if u.StateVector.ExistenceState != "" {
 		state["existenceState"] = u.StateVector.ExistenceState
+	}
+	if u.StateVector.NoteState != "" {
+		state["noteState"] = u.StateVector.NoteState
 	}
 	if len(state) > 0 {
 		doc.State = state

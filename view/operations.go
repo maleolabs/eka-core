@@ -3,7 +3,7 @@ package view
 import "github.com/maleolabs/eka-core/conformance"
 
 // This file implements the operations projection: the Operations domain
-// (run-, rel-) grouped by type in fixed order. Every entry carries its
+// (run-, rel-, shr-) grouped by type in fixed order. Every entry carries its
 // content-state.
 //
 // The operations projection ignores the optional target argument.
@@ -11,7 +11,7 @@ import "github.com/maleolabs/eka-core/conformance"
 // OperationsProjection is the Operations domain view.
 type OperationsProjection struct {
 	// Groups are the fixed artifact groups in order: Runbooks, Release
-	// Records.
+	// Records, Sharing Objects.
 	Groups []Group
 }
 
@@ -23,6 +23,7 @@ func buildOperations(g *Graph, target string) (Projection, error) {
 		Groups: domainGroups(g, conformance.Operations, []groupDef{
 			{[]string{"run"}, "Runbooks"},
 			{[]string{"rel"}, "Release Records"},
+			{[]string{"shr"}, "Sharing Objects"},
 		}),
 	}, nil
 }
