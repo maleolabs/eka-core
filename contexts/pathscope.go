@@ -1,12 +1,10 @@
 package contexts
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 
 	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/pathglob"
 )
 
 // This file implements the read side of the EKA Standard 1.5
@@ -45,7 +43,7 @@ func (e *Engine) UnitsForPath(projectID, sourceRepo, path string) ([]Entry, erro
 	}
 	out := []Entry{}
 	for _, u := range units {
-		patterns, declared, err := declaredScope(u)
+		patterns, declared, err := exchange.AppliesTo(u)
 		if err != nil {
 			return nil, fmt.Errorf("contexts: %s: `appliesTo` %v", u.CanonicalIdentityForm, err)
 		}
@@ -101,7 +99,7 @@ func (e *Engine) UnmatchedScopes(projectID, sourceRepo string, files []string) (
 	}
 	out := []ScopeWarning{}
 	for _, u := range units {
-		patterns, declared, err := declaredScope(u)
+		patterns, declared, err := exchange.AppliesTo(u)
 		if err != nil {
 			return nil, fmt.Errorf("contexts: %s: `appliesTo` %v", u.CanonicalIdentityForm, err)
 		}
@@ -128,24 +126,4 @@ func (e *Engine) UnmatchedScopes(projectID, sourceRepo string, files []string) (
 		return out[i].Pattern < out[j].Pattern
 	})
 	return out, nil
-}
-
-// declaredScope reads one unit's optional `appliesTo` declaration from its
-// content payload (the canonical structured content object). It reports
-// declared=false when the unit carries no structured content object — a
-// payload that is not a JSON object binds no path — or no `appliesTo` key.
-func declaredScope(u *exchange.Unit) (patterns []pathglob.Pattern, declared bool, err error) {
-	var content map[string]any
-	if json.Unmarshal(u.ContentPayload, &content) != nil || content == nil {
-		return nil, false, nil
-	}
-	raw, ok := content["appliesTo"]
-	if !ok {
-		return nil, false, nil
-	}
-	patterns, err = pathglob.Interpret(raw)
-	if err != nil {
-		return nil, false, err
-	}
-	return patterns, true, nil
 }
