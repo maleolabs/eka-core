@@ -12,7 +12,8 @@ import (
 )
 
 // This file tests the Standard 1.5 path-to-constraint retrieval door
-// (UnitsForPath) and its declaration extraction (declaredScope).
+// (UnitsForPath) and its declaration extraction (exchange.AppliesTo, covered
+// in the exchange package).
 
 // pathJSON builds a minimal conformant JSON-native artifact declaring the
 // given `appliesTo` patterns, for the fixture's repo namespace.
@@ -124,44 +125,6 @@ func TestUnitsForPathIsRepositoryScoped(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("sibling-repo set = %v, want empty (repository-scoped)", got)
-	}
-}
-
-// TestDeclaredScopeMalformedIsError: a malformed declaration is an error, so
-// a unit with one can never be silently ignored.
-func TestDeclaredScopeMalformedIsError(t *testing.T) {
-	for name, payload := range map[string]string{
-		"non-string element": `{"appliesTo":["ok",42]}`,
-		"non-array value":    `{"appliesTo":"src/**"}`,
-		"uninterpretable":    `{"appliesTo":["a**b"]}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			u := &exchange.Unit{ContentPayload: []byte(payload)}
-			if _, _, err := declaredScope(u); err == nil {
-				t.Fatalf("malformed declaration must be an error, got nil")
-			}
-		})
-	}
-}
-
-// TestDeclaredScopeAbsentBindsNothing: no declaration (or a non-object
-// payload) binds nothing and is not an error.
-func TestDeclaredScopeAbsentBindsNothing(t *testing.T) {
-	for name, payload := range map[string]string{
-		"no appliesTo key":   `{"purpose":"p"}`,
-		"empty object":       `{}`,
-		"non-object payload": `"just a string"`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			u := &exchange.Unit{ContentPayload: []byte(payload)}
-			patterns, declared, err := declaredScope(u)
-			if err != nil {
-				t.Fatalf("absent declaration must not error: %v", err)
-			}
-			if declared || patterns != nil {
-				t.Fatalf("declared=%v patterns=%v, want false/nil", declared, patterns)
-			}
-		})
 	}
 }
 
