@@ -163,6 +163,9 @@ func TestNewDraftValidation(t *testing.T) {
 		want string
 	}{
 		{"unknown type", NewDraftRequest{Project: project, Namespace: "ns", Type: "bogus", ID: "x"}, "unknown artifact type"},
+		{"deprecated type mbr", NewDraftRequest{Project: project, Namespace: "ns", Type: "mbr", ID: "x"}, "deprecated (read-only"},
+		{"deprecated relationship assigned-to", NewDraftRequest{Project: project, Namespace: "ns", Type: "sto", ID: "x",
+			Relationships: []exchange.Relationship{{Type: "assigned-to", Target: "ns/mbr:alice:1"}}}, "deprecated (read-only"},
 		{"empty id", NewDraftRequest{Project: project, Namespace: "ns", Type: "sto", ID: ""}, "non-empty"},
 		{"empty project", NewDraftRequest{Project: "", Namespace: "ns", Type: "sto", ID: "x"}, "project"},
 		{"empty namespace", NewDraftRequest{Project: project, Namespace: "", Type: "sto", ID: "x"}, "namespace"},
