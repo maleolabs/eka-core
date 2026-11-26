@@ -470,11 +470,13 @@ func plural(n int) string {
 
 // acceptedSpecificationVersions is the specification-version set this
 // importer accepts: the current version plus the legacy lines still
-// decodable (1.6 declared checks, 1.5 applicability declaration, 1.4
+// decodable (1.7 declared checks, 1.6, 1.5 applicability declaration, 1.4
 // validity horizon, 1.3 shr contract, 1.1, 1.0). Exports always declare the
-// current version.
+// current version; a frozen 1.7 package (pre member/work-ownership
+// deprecation) stays importable under 2.0.
 var acceptedSpecificationVersions = []string{
 	SpecificationVersion,
+	"1.7",
 	"1.6",
 	"1.5",
 	"1.4",

@@ -101,6 +101,11 @@ func folderForType(token string) string {
 		return "docs/operating/projections"
 	case "cmt":
 		return "docs/operating/notes"
+	case "mbr":
+		// mbr- is deprecated read-only in EKA Standard 2.0: the folder
+		// entry exists so a frozen pre-2.0 package carrying member lines
+		// still imports (read tolerance); it is never newly authored.
+		return "docs/operating/members"
 	}
 	return ""
 }

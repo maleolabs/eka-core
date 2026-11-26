@@ -20,13 +20,15 @@ import (
 //	  in-review requires at least one child note with role
 //	  "implementation" and note-state "resolved"; a work item at done
 //	  requires EVERY child note resolved (no open notes);
-//	- the conditional assigned-to sub-check (ADR-029, rule-014.md):
-//	  a work item at in-review/done that carries an assigned-to
-//	  relationship must point at at most one member (mbr-) line of the
-//	  same repository — a target of any other type, an unresolvable
-//	  target, a cross-repository target or more than one target is not
-//	  conformant. Work items without the relationship produce no
-//	  findings (legacy data untouched).
+//	- the assigned-to integrity sub-check (ADR-029, rule-014.md;
+//	  extended in EKA Standard 2.0): a work item that carries an
+//	  assigned-to relationship must point at exactly one member (mbr-)
+//	  line of the same repository — a target of any other type, an
+//	  unresolvable target, a cross-repository target or more than one
+//	  target is not conformant. The relationship is deprecated
+//	  READ-ONLY in 2.0: this validates existing edges on read, it never
+//	  frames new assignment. Work items without the relationship
+//	  produce no findings (legacy data untouched).
 //
 // Findings are R13 errors in deterministic order (sorted by the finding's
 // file — the artifact's canonical form — then message). A note whose
@@ -186,14 +188,17 @@ func (g *graphPass) run() {
 	}
 }
 
-// assignedToFindings evaluates the conditional assigned-to sub-check of
-// the R13 gate (ADR-029, rule-014.md). It binds ONLY work items that
-// carry an assigned-to relationship: the target must resolve to a member
-// (mbr-) line, at most one target is allowed (single-assignee), and the
-// target must originate from the same repository as the referring work
-// item (repository-level provenance; cross-repository assignment is
-// refused). A work item without the relationship produces no findings —
-// legacy data is untouched. Malformed references are reported by R5.
+// assignedToFindings evaluates the assigned-to integrity sub-check of
+// the R13 gate (ADR-029, rule-014.md; extended in EKA Standard 2.0). The
+// assigned-to relationship is deprecated READ-ONLY in 2.0: no new edge is
+// authored, but existing edges are still validated on read. It binds ONLY
+// work items that carry an assigned-to relationship: the target must
+// resolve to a member (mbr-) line, at most one target is allowed
+// (single-assignee), and the target must originate from the same
+// repository as the referring work item (repository-level provenance;
+// cross-repository targets are refused). A work item without the
+// relationship produces no findings — legacy data is untouched. Malformed
+// references are reported by R5.
 func (g *graphPass) assignedToFindings(a *Artifact) []Result {
 	raws := a.Relations["assigned-to"]
 	if len(raws) == 0 {

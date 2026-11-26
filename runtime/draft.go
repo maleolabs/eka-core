@@ -442,7 +442,10 @@ func (AuthoringService) NewDraft(rt *Runtime, req NewDraftRequest) (*Draft, erro
 // placeholders — the inline counterpart of NewDraftRequest.ContentFile)
 // and writes the file with the atomic O_CREATE|O_EXCL collision guard.
 func newDraftFile(ws *workspace.Workspace, req NewDraftRequest, extraContent map[string]any) (*Draft, error) {
-	if _, ok := conformance.DomainForToken(req.Type); !ok {
+	if !conformance.IsAuthoringType(req.Type) {
+		if conformance.IsReadOnlyType(req.Type) {
+			return nil, fmt.Errorf("authoring: artifact type %q is deprecated (read-only in EKA Standard 2.0); no new %q line may be authored", req.Type, req.Type)
+		}
 		return nil, fmt.Errorf("authoring: unknown artifact type %q; expected one of the %d EKA type tokens", req.Type, conformance.TypeTokenCount())
 	}
 	if req.ID == "" {
@@ -456,6 +459,18 @@ func newDraftFile(ws *workspace.Workspace, req NewDraftRequest, extraContent map
 	}
 	if req.Phase != "" && !conformance.IsVersionedType(req.Type) {
 		return nil, fmt.Errorf("authoring: `phase` is a context attribute allowed only on scp-/plan- artifacts, not on type %q", req.Type)
+	}
+	// Authoring surface: a requested relationship must be authorable. The
+	// deprecated read-only relationship (assigned-to, EKA Standard 2.0)
+	// and an unknown field are both refused — nothing is scaffolded.
+	for _, rel := range req.Relationships {
+		if conformance.IsAuthoringRelationship(rel.Type) {
+			continue
+		}
+		if conformance.IsReadOnlyRelationship(rel.Type) {
+			return nil, fmt.Errorf("authoring: relationship %q is deprecated (read-only in EKA Standard 2.0); no new edge may be authored", rel.Type)
+		}
+		return nil, fmt.Errorf("authoring: unknown relationship type %q; expected one of: %s", rel.Type, strings.Join(conformance.AuthoringRelationshipFields(), ", "))
 	}
 	// Rule 8: a ticket is a projection of a container — a ticket draft
 	// without a container reference can never publish. Refuse at
@@ -624,8 +639,10 @@ func draftJSON(req NewDraftRequest, extraContent map[string]any) ([]byte, error)
 		doc.Domain = req.Domain
 	}
 	// Relationships: canonical field order, deduplicated, targets
-	// sorted within each field (byte-deterministic).
-	for _, field := range conformance.RelationshipFieldNames() {
+	// sorted within each field (byte-deterministic). Only the authoring
+	// surface is scaffolded (the deprecated read-only assigned-to field
+	// is never newly written).
+	for _, field := range conformance.AuthoringRelationshipFields() {
 		var targets []string
 		seen := map[string]bool{}
 		for _, rel := range req.Relationships {

@@ -46,7 +46,10 @@ var stateFields = []string{
 // subject edge of cmt- artifacts; replies-to added by ADR-019 D8
 // revised: the reply -> parent edge of cmt- artifacts, single-parent;
 // assigned-to added by ADR-029: the work item -> member edge, at most
-// one target).
+// one target). This is the READ recognition set: assigned-to is
+// DEPRECATED in EKA Standard 2.0 (read-only) — still recognized and
+// validated on read, but no longer AUTHORABLE (see
+// AuthoringRelationshipFields).
 var relationshipFields = []string{
 	"amends",
 	"supersedes",
@@ -57,6 +60,20 @@ var relationshipFields = []string{
 	"replies-to",
 	"assigned-to",
 }
+
+// readOnlyTypes are artifact type tokens RETIRED from the authoring
+// surface by the deprecate-in-place policy (EKA Standard 2.0). They stay
+// fully RECOGNIZED on read — they remain in typeTokens, so the validator,
+// the import decoder and the view layer still resolve existing instances —
+// but they are never NEWLY authored (the type picker omits them; `eka new`
+// refuses them). Removal is deferred one major (EKA Standard 3.0). Standard
+// 2.0 deprecates mbr-.
+var readOnlyTypes = map[string]bool{"mbr": true}
+
+// readOnlyRelationships are relationship fields RETIRED from the authoring
+// surface (EKA Standard 2.0): recognized and validated on read, never
+// newly authored. Standard 2.0 deprecates assigned-to.
+var readOnlyRelationships = map[string]bool{"assigned-to": true}
 
 // versionedTypes are the artifact types that MUST carry a -v<nn> filename
 // suffix (Rule 2).
@@ -88,7 +105,10 @@ type TypeInfo struct {
 // typeTokens is the canonical 29-token table (reference-architecture.md
 // §2.1 — 26 tokens, plus cmt per ADR-019 D3, plus mbr per ADR-029, plus
 // shr per standard 1.3 (tokens/shr.md) — validation.md Rule 4). The
-// owned sets follow validation.md Rule 4 exactly.
+// owned sets follow validation.md Rule 4 exactly. This is the READ
+// recognition table: mbr- is DEPRECATED in EKA Standard 2.0 (read-only) —
+// still recognized and validated on read, but no longer authorable (see
+// IsAuthoringType).
 var typeTokens = map[string]TypeInfo{
 	"vis":  {Token: "vis", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
 	"str":  {Token: "str", Owned: []string{DomainContentState, DomainExistenceState}, IsKnowledge: true},
@@ -341,6 +361,53 @@ func IsDimensionToken(s string) bool {
 // names in declared order (Rule 5; discusses added by ADR-019 D5).
 func RelationshipFieldNames() []string {
 	return relationshipFields
+}
+
+// IsAuthoringType reports whether token may be NEWLY AUTHORED: a known
+// artifact type that is not read-only (deprecated). An unknown token and a
+// read-only token are both refused; use IsReadOnlyType to tell the two
+// apart for a precise diagnostic (deprecated vs unknown).
+func IsAuthoringType(token string) bool {
+	_, known := typeTokens[token]
+	return known && !readOnlyTypes[token]
+}
+
+// IsReadOnlyType reports whether token is a known artifact type RETIRED
+// from the authoring surface but still recognized on read
+// (deprecate-in-place, EKA Standard 2.0: mbr-). Removal is deferred one
+// major.
+func IsReadOnlyType(token string) bool {
+	return readOnlyTypes[token]
+}
+
+// AuthoringRelationshipFields returns the canonical relationship fields a
+// NEW edge may use, in declared order: the recognition set
+// (RelationshipFieldNames) minus the read-only (deprecated) fields. The
+// full set stays the recognition set for decode and validation; the
+// authoring surface (the relationship picker, `eka relate`) offers only
+// these.
+func AuthoringRelationshipFields() []string {
+	out := make([]string, 0, len(relationshipFields))
+	for _, f := range relationshipFields {
+		if !readOnlyRelationships[f] {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// IsAuthoringRelationship reports whether field may be used for a NEW
+// edge: a canonical field that is not read-only (deprecated).
+func IsAuthoringRelationship(field string) bool {
+	return contains(AuthoringRelationshipFields(), field)
+}
+
+// IsReadOnlyRelationship reports whether field is a canonical relationship
+// RETIRED from the authoring surface but still recognized on read
+// (deprecate-in-place, EKA Standard 2.0: assigned-to). Removal is deferred
+// one major.
+func IsReadOnlyRelationship(field string) bool {
+	return readOnlyRelationships[field]
 }
 
 // WorkItemTypes reports whether a type token is one of the six operating

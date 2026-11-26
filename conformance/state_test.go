@@ -179,6 +179,47 @@ func TestRelationshipFieldSet(t *testing.T) {
 	}
 }
 
+// TestAuthoringSurfaceDeprecation: the deprecate-in-place split (EKA
+// Standard 2.0) — mbr- and assigned-to stay RECOGNIZED on read (in the
+// type/relationship tables and DomainForToken) but are no longer
+// AUTHORABLE (the type picker and the relationship picker omit them).
+func TestAuthoringSurfaceDeprecation(t *testing.T) {
+	// Read recognition is intact.
+	if _, ok := typeTokens["mbr"]; !ok {
+		t.Fatal("mbr must stay recognized in the type table (read tolerance)")
+	}
+	if !IsKnownType("mbr") || !IsReadOnlyType("mbr") {
+		t.Errorf("mbr: IsKnownType=%v IsReadOnlyType=%v, want true/true", IsKnownType("mbr"), IsReadOnlyType("mbr"))
+	}
+	if d, ok := DomainForToken("mbr"); !ok || d != Execution {
+		t.Errorf("DomainForToken(mbr) = (%v, %v), want (Execution, true)", d, ok)
+	}
+	if !contains(relationshipFields, "assigned-to") || !IsReadOnlyRelationship("assigned-to") {
+		t.Errorf("assigned-to must stay recognized and read-only")
+	}
+	// Authoring is removed.
+	if IsAuthoringType("mbr") {
+		t.Error("mbr must not be an authoring type")
+	}
+	if IsAuthoringType("bogus") {
+		t.Error("an unknown token must not be an authoring type")
+	}
+	if IsAuthoringRelationship("assigned-to") {
+		t.Error("assigned-to must not be an authoring relationship")
+	}
+	authoring := AuthoringRelationshipFields()
+	if len(authoring) != len(relationshipFields)-1 {
+		t.Errorf("AuthoringRelationshipFields = %v, want the recognition set minus assigned-to", authoring)
+	}
+	if contains(authoring, "assigned-to") {
+		t.Errorf("authoring relationship fields must omit assigned-to: %v", authoring)
+	}
+	// A normal type/relationship stays authorable.
+	if !IsAuthoringType("sto") || !IsAuthoringRelationship("depends-on") {
+		t.Error("sto/depends-on must stay authorable")
+	}
+}
+
 func TestPhaseValueSet(t *testing.T) {
 	want := []string{"discovery", "mvp", "milestone", "release", "growth", "maturity", "sunset"}
 	if !sameStrings(phaseValues, want) {

@@ -65,21 +65,20 @@ func (s *Store) PutUnit(unitJSON, content []byte, r Ref) (string, bool, error) {
 
 // RepointUnit stores one immutable unit payload and MOVES the line's
 // reference to it — the explicit same-version mutable-reference update
-// of the relate no-churn mechanism (relate and the assignment commands
-// re-point the reference to a new payload with the SAME instance
-// version and revision; the payload archive gains one row — history is
+// of the relate no-churn mechanism (the relate edge-add re-points the
+// reference to a new payload with the SAME instance version and
+// revision; the payload archive gains one row — history is
 // accumulation — but the artifact line does not advance). It differs
 // from PutUnit only in the forward-only guard: a payload that already
 // sits in the line's history at the SAME instance version re-points
 // the reference — same-version payloads are current-state candidates,
-// never history (re-adding an assigned-to edge that an unassign
-// removed recreates the earlier same-version payload, and the
-// reference must move to it). A payload of an OLDER instance version
-// is still refused (the line never regresses). PutUnit keeps the
-// stricter ancestor guard for the sync/import re-seed paths, where
-// re-pointing to a same-version ancestor would clobber a
-// workspace-native write (e.g. a pull re-seeding the pre-assignment
-// payload over an assignment made at the same instance version).
+// never history (re-adding an edge that a removal dropped recreates the
+// earlier same-version payload, and the reference must move to it). A
+// payload of an OLDER instance version is still refused (the line never
+// regresses). PutUnit keeps the stricter ancestor guard for the
+// sync/import re-seed paths, where re-pointing to a same-version ancestor
+// would clobber a workspace-native write (e.g. a pull re-seeding the
+// pre-edit payload over an edge edit made at the same instance version).
 // The whole transaction is retried on SQLITE_BUSY.
 func (s *Store) RepointUnit(unitJSON, content []byte, r Ref) (string, bool, error) {
 	var hash string

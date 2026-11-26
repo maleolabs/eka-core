@@ -59,6 +59,8 @@ var tokenDomain = map[string]Domain{
 	"rvw": Execution, "ctr": Execution, "tkt": Execution,
 	"sto": Execution, "ts": Execution, "bug": Execution, "td": Execution,
 	"ch": Execution, "spk": Execution, "ses": Execution, "cmt": Execution,
+	// mbr- is deprecated read-only in EKA Standard 2.0: it stays mapped
+	// (recognition/derivation on read) but is no longer authorable.
 	"mbr": Execution,
 	// Operations (5).
 	"run": Operations, "rel": Operations, "shr": Operations,

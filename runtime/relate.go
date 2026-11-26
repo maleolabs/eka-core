@@ -473,9 +473,18 @@ func relateDraft(ws *workspace.Workspace, rt *Runtime, ref conformance.Reference
 // or not — is a self-reference (a draft cannot meaningfully reference a
 // specific instance of itself).
 func checkRelateEdges(ns, typ, id string, version int, draft bool, adds []exchange.Relationship) error {
-	known := conformance.RelationshipFieldNames()
+	// Only the AUTHORING surface is offered: a new edge may not use a
+	// deprecated read-only field (assigned-to, EKA Standard 2.0) even
+	// though the field is still recognized on read.
+	known := conformance.AuthoringRelationshipFields()
 	for _, rel := range adds {
 		if !containsString(known, rel.Type) {
+			if conformance.IsReadOnlyRelationship(rel.Type) {
+				return &RelateRefusal{
+					Reason: fmt.Sprintf("relationship %q is deprecated (read-only in EKA Standard 2.0); no new edge may be authored", rel.Type),
+					Hint:   "use --depends-on/--derives-from/--validates/--supersedes/--amends",
+				}
+			}
 			return &RelateRefusal{
 				Reason: fmt.Sprintf("unknown relationship type %q (expected one of: %s)", rel.Type, strings.Join(known, ", ")),
 				Hint:   "use --depends-on/--derives-from/--validates/--supersedes/--amends",

@@ -776,7 +776,7 @@ func TestImportUnsupportedVersions(t *testing.T) {
 	}{
 		{"serialization version 3", func(h *Header) { h.SerializationVersion = "3" }, "serialization version"},
 		{"exchange format 9", func(h *Header) { h.ExchangeFormatVersion = "9" }, "exchange format version"},
-		{"specification 2.0", func(h *Header) { h.SpecificationVersion = "2.0" }, "specification version"},
+		{"specification 9.9", func(h *Header) { h.SpecificationVersion = "9.9" }, "specification version"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := assembleTestPackage(t, testPackageSpec{
@@ -803,13 +803,13 @@ func TestImportUnsupportedVersions(t *testing.T) {
 }
 
 // TestImportAcceptsEveryDeclaredSpecificationVersion: the accepted set is
-// the current version plus the legacy lines the standard shipped (1.6
-// declared checks, 1.5 applicability declaration, 1.4 validity horizon, 1.3
-// shr contract, 1.1, 1.0). Widening the set for a new version must never
-// silently drop an older line, and a 1.7 exporter must read every package a
-// 1.7-era importer accepts.
+// the current version plus the legacy lines the standard shipped (1.7
+// declared checks, 1.6, 1.5 applicability declaration, 1.4 validity
+// horizon, 1.3 shr contract, 1.1, 1.0). Widening the set for a new version
+// must never silently drop an older line, and a 2.0 exporter must read
+// every package a 1.7-era importer accepts.
 func TestImportAcceptsEveryDeclaredSpecificationVersion(t *testing.T) {
-	for _, v := range []string{"1.6", "1.5", "1.4", "1.3", "1.1", "1.0"} {
+	for _, v := range []string{"2.0", "1.7", "1.6", "1.5", "1.4", "1.3", "1.1", "1.0"} {
 		t.Run(v, func(t *testing.T) {
 			dir := assembleTestPackage(t, testPackageSpec{
 				units:           []*Unit{specUnit("ns-one", "001", 1, "approved", nil)},
@@ -820,6 +820,53 @@ func TestImportAcceptsEveryDeclaredSpecificationVersion(t *testing.T) {
 				t.Fatalf("specification version %s must be accepted: %v", v, err)
 			}
 		})
+	}
+}
+
+// TestImportLegacyMemberAssignmentReadTolerance: a frozen pre-2.0 package
+// that still carries a deprecated mbr- line and an assigned-to edge
+// imports with no error (deprecate-in-place, EKA Standard 2.0): the token
+// and the relationship stay RECOGNIZED on read even though they are no
+// longer authorable. The decoder, the state/owned-set check, the section
+// check and the relationship-name check all accept the legacy shapes.
+func TestImportLegacyMemberAssignmentReadTolerance(t *testing.T) {
+	member := &Unit{
+		Identity: Identity{Namespace: "ns-one", Type: "mbr", ID: "alice", InstanceVersion: 1},
+		Revision: 1, Author: conformance.User("Test Author"), Created: "2026-08-05", Updated: "2026-08-05",
+		StateVector:    StateVector{ContentState: "approved", ExistenceState: "active"},
+		Classification: Classification{},
+		Content:        ContentRef{Representation: ContentRepresentation, File: "content"},
+		ContentPayload: []byte("\n# Member Alice\n\n## Purpose\n\nMember line.\n\n## Content\n\n- role: engineer\n"),
+		ChangeLog: []ChangeLogEntry{
+			{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Test Author")},
+			{Date: "2026-08-05", Domain: "content-state", From: "-", To: "approved", By: conformance.User("Test Author")},
+		},
+	}
+	member.CanonicalIdentityForm = member.Identity.CanonicalForm()
+
+	story := &Unit{
+		Identity: Identity{Namespace: "ns-one", Type: "sto", ID: "assigned", InstanceVersion: 1},
+		Revision: 1, Author: conformance.User("Test Author"), Created: "2026-08-05", Updated: "2026-08-05",
+		StateVector:    StateVector{ExecutionState: "done", ExistenceState: "active"},
+		Classification: Classification{Dimension: "requirements"},
+		Content:        ContentRef{Representation: ContentRepresentation, File: "content"},
+		ContentPayload: []byte("\n# Assigned\n\n## Description\n\nA done work item.\n\n## Acceptance Criteria\n\n- AC1.\n"),
+		ChangeLog: []ChangeLogEntry{
+			{Date: "2026-08-05", Domain: "existence-state", From: "-", To: "active", By: conformance.User("Test Author")},
+			{Date: "2026-08-05", Domain: "execution-state", From: "-", To: "done", By: conformance.User("Test Author")},
+		},
+		Relationships: []Relationship{{Type: "assigned-to", Target: "ns-one/mbr:alice:1"}},
+	}
+	story.CanonicalIdentityForm = story.Identity.CanonicalForm()
+
+	dir := assembleTestPackage(t, testPackageSpec{units: []*Unit{member, story}})
+	repo := newTestRepo(t)
+	res := mustImport(t, dir, ImportOptions{Root: repo})
+	if len(res.ImportedArtifacts) != 2 {
+		t.Fatalf("imported = %v, want the mbr- and sto- units", res.ImportedArtifacts)
+	}
+	if len(res.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none", res.Warnings)
 	}
 }
 

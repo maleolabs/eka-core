@@ -43,10 +43,14 @@ import (
 const (
 	// SpecificationVersion is the version of the EKA Exchange
 	// Specification (and EKA standard) the exported knowledge conforms
-	// to: "1.7" (additive over 1.6: the declared-checks content field —
-	// a constraint Artifact declares the checks that verify it).
-	SpecificationVersion = "1.7"
-	// LegacySpecificationVersion is the previous standard version still
+	// to: "2.0" (breaking over 1.7: the deprecate-in-place retirement of
+	// the member/work-ownership model from the authoring surface — the
+	// mbr- token and the assigned-to relationship become READ-ONLY,
+	// still recognized, resolvable and validated on read; no additive
+	// exchange shape change, so an object exported at 1.7 re-exports
+	// byte-identically here).
+	SpecificationVersion = "2.0"
+	// LegacySpecificationVersion is the earliest standard version still
 	// accepted at import (standard-112-bump): packages exported against
 	// 1.1 remain readable; exports always declare the current version.
 	LegacySpecificationVersion = "1.1"
