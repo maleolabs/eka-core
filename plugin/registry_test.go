@@ -20,6 +20,13 @@ func TestOfficialRegistryLookup(t *testing.T) {
 	if repo.String() != "maleolabs/eka-mcp" {
 		t.Errorf("repo.String() = %q, want maleolabs/eka-mcp", repo.String())
 	}
+	repo, ok = OfficialRegistry.Lookup("steward")
+	if !ok {
+		t.Fatal("steward must be a registered official plugin")
+	}
+	if repo.Owner != "maleolabs" || repo.Name != "eka-steward" {
+		t.Errorf("steward repo = %+v, want maleolabs/eka-steward", repo)
+	}
 }
 
 func TestOfficialRegistryLookupUnknown(t *testing.T) {
@@ -35,6 +42,9 @@ func TestOfficialRegistryIsOfficial(t *testing.T) {
 	if !OfficialRegistry.IsOfficial("mcp") {
 		t.Error("mcp must be official")
 	}
+	if !OfficialRegistry.IsOfficial("steward") {
+		t.Error("steward must be official")
+	}
 	if OfficialRegistry.IsOfficial("nope") {
 		t.Error("nope must not be official")
 	}
@@ -42,7 +52,7 @@ func TestOfficialRegistryIsOfficial(t *testing.T) {
 
 func TestOfficialRegistryNames(t *testing.T) {
 	names := OfficialRegistry.Names()
-	if !reflect.DeepEqual(names, []string{"mcp"}) {
-		t.Errorf("Names() = %v, want [mcp] (sorted)", names)
+	if !reflect.DeepEqual(names, []string{"mcp", "steward"}) {
+		t.Errorf("Names() = %v, want [mcp steward] (sorted)", names)
 	}
 }

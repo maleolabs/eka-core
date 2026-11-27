@@ -268,11 +268,11 @@ const maxPluginOutputSize = 1 << 20 // 1 MiB
 // that hangs past ctx's deadline, or writes more than
 // maxPluginOutputSize, is refused — a hung or spewing plugin must not
 // wedge the CLI or exhaust memory. The subprocess runs under the
-// minimal environment whitelist (pluginEnv): a plugin must never see
+// minimal environment whitelist (PluginEnv): a plugin must never see
 // the CLI user's secrets.
 func (p Plugin) runContext(ctx context.Context, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, p.Exe, args...)
-	cmd.Env = pluginEnv()
+	cmd.Env = PluginEnv()
 	var stdout limitedBuffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -292,19 +292,23 @@ func (p Plugin) runContext(ctx context.Context, args ...string) ([]byte, error) 
 	return stdout.buf.Bytes(), nil
 }
 
-// pluginEnv is the minimal environment whitelist the CLI grants a
-// plugin subprocess — an explicit allow-list, never a denylist. The
-// plugin contract (manifest/install subcommands with explicit --dir
-// arguments) needs PATH (locating tools), HOME (user configuration),
-// EKA_PLUGIN_DIR (the CLI-managed plugin directory) and, on Windows,
-// SystemRoot (DLL resolution). Everything else — notably credentials
-// such as GH_TOKEN, SSH_AUTH_SOCK and cloud-provider variables — is
-// deliberately NOT inherited: a third-party binary is executed for its
-// manifest BEFORE the consent decision, and it must not be able to
-// read the user's secrets from the environment.
-func pluginEnv() []string {
+// PluginEnv is the canonical minimal environment whitelist the CLI
+// grants a plugin subprocess — an explicit allow-list, never a denylist,
+// and the single source of truth for what a plugin may see. The plugin
+// contract (manifest/install subcommands with explicit --dir arguments)
+// needs PATH (locating tools, always emitted), HOME (user
+// configuration), EKA_PLUGIN_DIR (the CLI-managed plugin directory),
+// EKA_HOME (the EKA ecosystem home — a non-secret coordinate, not a
+// credential) and, on Windows, SystemRoot (DLL resolution). Every
+// non-PATH variable is emitted only when set. Everything else —
+// notably credentials such as GH_TOKEN, SSH_AUTH_SOCK and
+// cloud-provider variables — is deliberately NOT inherited: a
+// third-party binary is executed for its manifest BEFORE the consent
+// decision, and it must not be able to read the user's secrets from
+// the environment.
+func PluginEnv() []string {
 	env := []string{"PATH=" + os.Getenv("PATH")}
-	for _, key := range []string{"HOME", "EKA_PLUGIN_DIR", "SystemRoot"} {
+	for _, key := range []string{"HOME", "EKA_PLUGIN_DIR", "EKA_HOME", "SystemRoot"} {
 		if v := os.Getenv(key); v != "" {
 			env = append(env, key+"="+v)
 		}
