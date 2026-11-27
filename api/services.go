@@ -1,6 +1,9 @@
 package api
 
-import "github.com/maleolabs/eka-core/v2/runtime"
+import (
+	"github.com/maleolabs/eka-core/v2/contexts"
+	"github.com/maleolabs/eka-core/v2/runtime"
+)
 
 // This file defines the service contracts of the public API and their
 // façades over the internal runtime services, plus the re-exported
@@ -105,8 +108,43 @@ type Authoring interface {
 	SyncAdopt(repoPath string, targets []string, dryRun bool) (*SyncAdoptResult, error)
 }
 
-// --- Re-exported contract types (aliases to the internal types, so a
-// consumer names them through this package only). ---
+// Contexts is the deterministic Context Engine read service
+// (contexts.Engine). Build assembles the bounded context of one subject
+// at a depth (local | dependency | engineering). The depth vocabulary and
+// the result types are re-exported below so a consumer names them through
+// this package only.
+type Contexts interface {
+	// Build assembles the context of one subject (a reference or short
+	// form) of project projectID at the given depth.
+	Build(subject, projectID string, depth ContextDepth, opts ContextOptions) (*ContextObject, error)
+}
+
+// --- Re-exported Context Engine types and vocabulary. ---
+
+// Context Engine types.
+type (
+	// ContextDepth is a context depth (local | dependency | engineering).
+	ContextDepth = contexts.Depth
+	// ContextOptions configures one Build run.
+	ContextOptions = contexts.Options
+	// ContextObject is the assembled context of one subject.
+	ContextObject = contexts.Object
+)
+
+// ParseDepth parses a depth name into a ContextDepth; ok is false for an
+// unknown name. Mirror of contexts.ParseDepth.
+func ParseDepth(s string) (ContextDepth, bool) { return contexts.ParseDepth(s) }
+
+// Depths returns the valid depth names in render order. Mirror of
+// contexts.Depths.
+func Depths() []string { return contexts.Depths() }
+
+// contextsFacade adapts contexts.Engine to the Contexts contract.
+type contextsFacade struct{ rt *runtime.Runtime }
+
+func (c contextsFacade) Build(subject, projectID string, depth ContextDepth, opts ContextOptions) (*ContextObject, error) {
+	return contexts.New(c.rt).Build(subject, projectID, depth, opts)
+}
 
 // Registry and status.
 type (
