@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/maleolabs/eka-core/metadata"
+	"github.com/maleolabs/eka-core/v2/metadata"
 )
 
 // This file implements the project + repository registry over the

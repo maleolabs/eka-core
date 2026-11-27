@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/store"
-	"github.com/maleolabs/eka-core/workspace"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/store"
+	"github.com/maleolabs/eka-core/v2/workspace"
 )
 
 // This file implements the Relate API: the relationship-only edge-add

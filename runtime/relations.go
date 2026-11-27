@@ -2,10 +2,10 @@ package runtime
 
 import (
 	"fmt"
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 	"sort"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // This file implements the RelationsService: relationship traversal

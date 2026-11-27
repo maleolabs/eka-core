@@ -27,7 +27,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/maleolabs/eka-core/store"
+	"github.com/maleolabs/eka-core/v2/store"
 )
 
 // schemaVersion is the workspace.json schema version.

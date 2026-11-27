@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // This file implements scope resolution and model construction (RSF §13.1

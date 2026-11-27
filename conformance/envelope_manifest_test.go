@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // envelope_manifest_test.go is the drift alarm for the ADR-035 capture

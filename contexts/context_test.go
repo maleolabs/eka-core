@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/runtime"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/runtime"
 )
 
 // This file tests the Context Engine at the engine level: the

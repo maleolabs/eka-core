@@ -1,6 +1,6 @@
 package view
 
-import "github.com/maleolabs/eka-core/conformance"
+import "github.com/maleolabs/eka-core/v2/conformance"
 
 // This file implements the operations projection: the Operations domain
 // (run-, rel-, shr-) grouped by type in fixed order. Every entry carries its

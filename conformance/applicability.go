@@ -1,6 +1,6 @@
 package conformance
 
-import "github.com/maleolabs/eka-core/pathglob"
+import "github.com/maleolabs/eka-core/v2/pathglob"
 
 // This file implements the composition check of the EKA Standard 1.5
 // applicability declaration (specification/exchange.md, "Content:

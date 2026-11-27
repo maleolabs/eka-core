@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // This file tests the content-state branch of the Authoring transition

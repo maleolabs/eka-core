@@ -32,7 +32,7 @@ package contexts
 import (
 	"encoding/json"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // Schema is the canonical JSON schema identifier of the context

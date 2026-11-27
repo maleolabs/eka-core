@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/metadata"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/metadata"
 )
 
 // provenance_test.go guards the ADR-035 provenance round trip through the

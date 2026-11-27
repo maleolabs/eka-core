@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // This file implements the import entry point:

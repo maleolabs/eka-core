@@ -78,10 +78,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/metadata"
-	"github.com/maleolabs/eka-core/workspace"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/metadata"
+	"github.com/maleolabs/eka-core/v2/workspace"
 )
 
 // Options configures one sync run. Pull and Push both default to true

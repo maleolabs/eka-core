@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // This file implements the unit -> artifact projection consumed by the

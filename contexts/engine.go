@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/runtime"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/runtime"
 )
 
 // This file implements the Context Engine: the deterministic

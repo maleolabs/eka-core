@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // This file implements the immutable payload store: the content-

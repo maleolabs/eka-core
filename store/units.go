@@ -3,7 +3,7 @@ package store
 import (
 	"fmt"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // This file implements the unit projection of the canonical store: the

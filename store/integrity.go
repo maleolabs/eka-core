@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // This file implements the integrity verification of the canonical

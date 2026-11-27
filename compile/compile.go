@@ -29,8 +29,8 @@ package compile
 import (
 	"fmt"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // Result is the outcome of one successful Compile run.

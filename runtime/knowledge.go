@@ -3,8 +3,8 @@ package runtime
 import (
 	"fmt"
 
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/store"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/store"
 )
 
 // This file implements the KnowledgeService: the Engineering-Knowledge

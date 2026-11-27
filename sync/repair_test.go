@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // seedSnapshot builds a real snapshot in a fixture copy via a full sync

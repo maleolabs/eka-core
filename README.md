@@ -12,7 +12,7 @@ The normative standard text lives in the
 repository is the executable implementation. **eka-core implements EKA
 Standard 1.5.**
 
-Module path: `github.com/maleolabs/eka-core`
+Module path: `github.com/maleolabs/eka-core/v2`
 
 ## Requirements
 
@@ -22,7 +22,7 @@ Module path: `github.com/maleolabs/eka-core`
 ## Installation
 
 ```sh
-go get github.com/maleolabs/eka-core@v1.0.0
+go get github.com/maleolabs/eka-core/v2@v1.0.0
 ```
 
 eka-core is a library: consumers import its packages directly (the CLI,

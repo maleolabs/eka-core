@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/store"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/store"
 )
 
 // This file implements the container lifecycle of the Authoring API

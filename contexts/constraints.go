@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/pathglob"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/pathglob"
 )
 
 // This file implements the snapshot side of the constraint index: the

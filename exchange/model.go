@@ -35,7 +35,7 @@ package exchange
 import (
 	"strconv"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // Specification version constants, echoed into the Package Header and

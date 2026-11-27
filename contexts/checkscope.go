@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/pathglob"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/pathglob"
 )
 
 // This file implements the read side of the EKA Standard 1.7 declared-checks

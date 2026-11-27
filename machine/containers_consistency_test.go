@@ -30,9 +30,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/machine"
-	"github.com/maleolabs/eka-core/view"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/machine"
+	"github.com/maleolabs/eka-core/v2/view"
 )
 
 // consistencyUnit builds one canonical unit for the consistency tests:
