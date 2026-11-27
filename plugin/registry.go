@@ -38,7 +38,8 @@ type Registry struct {
 var OfficialRegistry = Registry{
 	entries: map[string]Repo{
 		// Official EKA plugins.
-		"mcp": {Owner: "maleolabs", Name: "eka-mcp"},
+		"mcp":     {Owner: "maleolabs", Name: "eka-mcp"},
+		"steward": {Owner: "maleolabs", Name: "eka-steward"},
 	},
 }
 

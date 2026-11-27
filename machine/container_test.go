@@ -176,6 +176,48 @@ func TestNewContainerCollectionDerivation(t *testing.T) {
 	}
 }
 
+// TestContainerTicketsDedupedByLine is the regression for the live
+// defect where Tickets counted ticket INSTANCES instead of ticket
+// LINES: a tkt- line carrying two instances (v1 superseded by v2),
+// both deriving the container, must contribute ONE ticket. A distinct
+// second ticket line keeps the count honest (2 lines -> 2).
+func TestContainerTicketsDedupedByLine(t *testing.T) {
+	units := []*exchange.Unit{
+		containerUnit(t, "acme", "ctr", "wave-1", 1, "2026-08-05",
+			map[string]string{conformance.DomainContainerState: "active", conformance.DomainExistenceState: "active"}),
+		// One ticket line, two instances, each deriving the container
+		// and the same work item.
+		containerUnit(t, "acme", "tkt", "dup", 1, "2026-08-05", nil,
+			exchange.Relationship{Type: "derives-from", Target: "ctr:wave-1"},
+			exchange.Relationship{Type: "derives-from", Target: "sto:alpha"}),
+		containerUnit(t, "acme", "tkt", "dup", 2, "2026-08-06", nil,
+			exchange.Relationship{Type: "derives-from", Target: "ctr:wave-1"},
+			exchange.Relationship{Type: "derives-from", Target: "sto:alpha"}),
+		// A distinct second ticket line deriving a distinct work item.
+		containerUnit(t, "acme", "tkt", "other", 1, "2026-08-05", nil,
+			exchange.Relationship{Type: "derives-from", Target: "ctr:wave-1"},
+			exchange.Relationship{Type: "derives-from", Target: "ts:gamma"}),
+		containerUnit(t, "acme", "sto", "alpha", 1, "2026-08-05",
+			map[string]string{conformance.DomainExecutionState: "planned", conformance.DomainExistenceState: "active"}),
+		containerUnit(t, "acme", "ts", "gamma", 1, "2026-08-05",
+			map[string]string{conformance.DomainExecutionState: "in-progress", conformance.DomainExistenceState: "active"}),
+	}
+	col, err := NewContainerCollection(units)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(col.Containers) != 1 {
+		t.Fatalf("containers = %d, want 1", len(col.Containers))
+	}
+	c := col.Containers[0]
+	if c.Tickets != 2 {
+		t.Errorf("tickets = %d, want 2 (the dup line's two instances collapse to one)", c.Tickets)
+	}
+	if c.Items != 2 {
+		t.Errorf("items = %d, want 2 (alpha, gamma — deduplicated by line)", c.Items)
+	}
+}
+
 // TestContainerCollectionEmpty: an empty unit list yields a containers
 // collection with count 0 and an empty container list (never null).
 func TestContainerCollectionEmpty(t *testing.T) {

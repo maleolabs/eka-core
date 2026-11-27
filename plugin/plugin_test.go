@@ -285,6 +285,55 @@ func TestInstallRunsPluginAndParsesResult(t *testing.T) {
 	}
 }
 
+// TestPluginEnvWhitelist pins the exact environment set the CLI grants
+// a plugin subprocess: PATH always; HOME, EKA_PLUGIN_DIR, EKA_HOME and
+// SystemRoot only when set; credentials never — not even when present
+// in the parent environment. PluginEnv is the sole whitelist source.
+func TestPluginEnvWhitelist(t *testing.T) {
+	t.Setenv("HOME", "/home/tester")
+	t.Setenv("EKA_PLUGIN_DIR", "/opt/eka/plugins")
+	t.Setenv("EKA_HOME", "/home/tester/.eka")
+	t.Setenv("SystemRoot", `C:\Windows`)
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "super-secret")
+
+	env := PluginEnv()
+	got := map[string]bool{}
+	for _, kv := range env {
+		got[kv] = true
+	}
+	want := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=/home/tester",
+		"EKA_PLUGIN_DIR=/opt/eka/plugins",
+		"EKA_HOME=/home/tester/.eka",
+		"SystemRoot=" + `C:\Windows`,
+	}
+	if len(env) != len(want) {
+		t.Errorf("PluginEnv() = %v, want exactly %v", env, want)
+	}
+	for _, kv := range want {
+		if !got[kv] {
+			t.Errorf("PluginEnv() missing %q; got %v", kv, env)
+		}
+	}
+	if got["AWS_SECRET_ACCESS_KEY=super-secret"] {
+		t.Errorf("a credential must never be inherited, got %v", env)
+	}
+}
+
+// TestPluginEnvOptionalOnlyWhenSet: with no optional coordinate in the
+// environment, PluginEnv emits PATH alone.
+func TestPluginEnvOptionalOnlyWhenSet(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("EKA_PLUGIN_DIR", "")
+	t.Setenv("EKA_HOME", "")
+	t.Setenv("SystemRoot", "")
+	env := PluginEnv()
+	if len(env) != 1 || !strings.HasPrefix(env[0], "PATH=") {
+		t.Errorf("PluginEnv() = %v, want only PATH when no optional coordinate is set", env)
+	}
+}
+
 func TestInstallFailureSurfacesStderr(t *testing.T) {
 	bin := t.TempDir()
 	script := `#!/bin/sh
