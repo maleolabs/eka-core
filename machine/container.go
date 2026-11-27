@@ -20,10 +20,12 @@ import (
 // counts only when it RESOLVES against the unit set, a versioned target
 // to its exact instance, a line target to the line's highest instance;
 // targets that parse but do not resolve never match):
-//   - tickets: the tkt- units whose FIRST resolvable derives-from ctr-
+//   - tickets: the tkt- LINES whose FIRST resolvable derives-from ctr-
 //     target is the container line (a ticket belongs to at most one
 //     container — the first resolvable ctr- reference in stored order,
-//     the same rule as the board's membership derivation);
+//     the same rule as the board's membership derivation; the
+//     instances of a ticket line collapse to one, mirroring the view
+//     projection);
 //   - items: the work items referenced by those tickets' derives-from,
 //     deduplicated by line (the first RESOLVABLE derives-from target
 //     whose type owns the Execution State domain — the same work-item
@@ -55,8 +57,9 @@ type Container struct {
 	// items referenced by the container's tickets' derives-from,
 	// deduplicated by identity line.
 	Items int `json:"items"`
-	// Tickets is the number of tkt- units deriving from the container
-	// line.
+	// Tickets is the number of tkt- LINES deriving from the container
+	// line: the instances of a ticket line collapse to one (mirroring
+	// the view projection and the Items dedup).
 	Tickets int `json:"tickets"`
 	// StartedAt is the container unit's Created date.
 	StartedAt string `json:"startedAt,omitempty"`
@@ -229,6 +232,7 @@ func containerFrom(u *exchange.Unit, idx *lineIndex) Container {
 		}
 	}
 	seen := make(map[string]bool)
+	seenTickets := make(map[string]bool)
 	for _, t := range idx.units {
 		if t.Identity.Type != "tkt" {
 			continue
@@ -239,7 +243,14 @@ func containerFrom(u *exchange.Unit, idx *lineIndex) Container {
 			container.Identity.ID != u.Identity.ID {
 			continue // the ticket's resolved container is another line
 		}
-		c.Tickets++
+		// Deduplicate by ticket LINE: a tkt- line carrying several
+		// instances (an older one superseded) is one ticket, not many
+		// (mirrors Items' line dedup and the view projection).
+		tktKey := unitLineKey(t.Identity.Namespace, t.Identity.Type, t.Identity.ID)
+		if !seenTickets[tktKey] {
+			seenTickets[tktKey] = true
+			c.Tickets++
+		}
 		if workItem == nil {
 			continue // tickets without a resolvable work item contribute nothing
 		}
