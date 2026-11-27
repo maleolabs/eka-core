@@ -62,6 +62,8 @@ type Runtime interface {
 	Integrity() Integrity
 	// Authoring is the compiler/validation/publish/sync write service.
 	Authoring() Authoring
+	// Contexts is the deterministic Context Engine read service.
+	Contexts() Contexts
 }
 
 // Open opens the EKA Runtime read-only: it never initializes a
@@ -108,6 +110,7 @@ func newRuntimeFacade(rt *runtime.Runtime) *runtimeFacade {
 		res:   resolverFacade{rt},
 		integ: integrityFacade{rt},
 		auth:  authoringFacade{rt},
+		ctx:   contextsFacade{rt},
 	}
 }
 
@@ -119,6 +122,7 @@ type runtimeFacade struct {
 	res   Resolver
 	integ Integrity
 	auth  Authoring
+	ctx   Contexts
 }
 
 func (f *runtimeFacade) Path() string         { return f.rt.Path() }
@@ -129,3 +133,4 @@ func (f *runtimeFacade) Knowledge() Knowledge { return f.know }
 func (f *runtimeFacade) Resolver() Resolver   { return f.res }
 func (f *runtimeFacade) Integrity() Integrity { return f.integ }
 func (f *runtimeFacade) Authoring() Authoring { return f.auth }
+func (f *runtimeFacade) Contexts() Contexts   { return f.ctx }
