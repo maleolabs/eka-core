@@ -3,7 +3,7 @@ package machine
 import (
 	"sort"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // Collection is the machine projection of a domain query: every unit of

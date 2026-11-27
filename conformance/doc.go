@@ -6,7 +6,7 @@
 //
 // The package is deliberately independent from the CLI layer (cmd/eka) so
 // that future tooling can import it directly as
-// github.com/maleolabs/eka-core/conformance.
+// github.com/maleolabs/eka-core/v2/conformance.
 //
 // The single entry point is Validate, which scans the <root>/docs
 // knowledge tree for authoring files (.md always; .json only when the name

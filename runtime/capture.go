@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // CaptureService is the universal gateway for inferred direct-task capture

@@ -38,7 +38,7 @@ fi
 
 # "package percent" rows from the ok lines. Packages with no test files carry
 # no coverage figure and are skipped.
-sed -n 's|^ok[[:space:]]\{1,\}github.com/maleolabs/eka-core/\([^[:space:]]*\)[[:space:]].*coverage: \([0-9.]*\)%.*|\1 \2|p' "$out" > "$rows"
+sed -n 's|^ok[[:space:]]\{1,\}github.com/maleolabs/eka-core/v2/\([^[:space:]]*\)[[:space:]].*coverage: \([0-9.]*\)%.*|\1 \2|p' "$out" > "$rows"
 
 if [ ! -s "$rows" ]; then
     echo "coverage-gate: no coverage data found in the test output"

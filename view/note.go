@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // This file implements the note accessors of the knowledge graph

@@ -46,8 +46,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // LineForm renders the canonical line identity form of a unit:

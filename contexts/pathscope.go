@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // This file implements the read side of the EKA Standard 1.5

@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/workspace"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/workspace"
 )
 
 // This file implements the `eka note` side of the Authoring API (ADR-019

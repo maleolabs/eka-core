@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/metadata"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/metadata"
 )
 
 // import_test.go covers the import pipeline (Exchange §11, RSF §13.2):

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // fixtureValid is the conformant compile test fixture: 5 artifacts

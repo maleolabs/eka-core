@@ -27,8 +27,8 @@
 package api
 
 import (
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/runtime"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/runtime"
 )
 
 // ContractVersion is the machine-readable version of this package's

@@ -1,9 +1,9 @@
 package runtime
 
 import (
-	"github.com/maleolabs/eka-core/compile"
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/sync"
+	"github.com/maleolabs/eka-core/v2/compile"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/sync"
 )
 
 // This file implements the Authoring API: the stateless gateway from

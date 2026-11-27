@@ -1,6 +1,6 @@
 # eka-core/api — the public contract
 
-`github.com/maleolabs/eka-core/api` is the **versioned public contract**
+`github.com/maleolabs/eka-core/v2/api` is the **versioned public contract**
 of eka-core. Consumers (eka-mcp today, the steward and Atrium later)
 import this package and treat `runtime/`, `store/`, `workspace/` and
 `sync/` as private implementation details.

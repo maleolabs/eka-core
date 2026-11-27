@@ -43,8 +43,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/maleolabs/eka-core/store"
-	"github.com/maleolabs/eka-core/workspace"
+	"github.com/maleolabs/eka-core/v2/store"
+	"github.com/maleolabs/eka-core/v2/workspace"
 )
 
 // Runtime is one opened EKA Runtime: the workspace plus its canonical

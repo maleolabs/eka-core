@@ -1,6 +1,6 @@
 package api
 
-import "github.com/maleolabs/eka-core/runtime"
+import "github.com/maleolabs/eka-core/v2/runtime"
 
 // This file defines the service contracts of the public API and their
 // façades over the internal runtime services, plus the re-exported

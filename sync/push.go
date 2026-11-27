@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/metadata"
-	"github.com/maleolabs/eka-core/store"
-	"github.com/maleolabs/eka-core/workspace"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/metadata"
+	"github.com/maleolabs/eka-core/v2/store"
+	"github.com/maleolabs/eka-core/v2/workspace"
 )
 
 // This file implements the push side of the sync engine: the canonical

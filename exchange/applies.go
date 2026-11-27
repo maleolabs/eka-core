@@ -3,7 +3,7 @@ package exchange
 import (
 	"encoding/json"
 
-	"github.com/maleolabs/eka-core/pathglob"
+	"github.com/maleolabs/eka-core/v2/pathglob"
 )
 
 // This file implements the read side of the EKA Standard 1.5 applicability

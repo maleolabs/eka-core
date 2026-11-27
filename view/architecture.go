@@ -1,6 +1,6 @@
 package view
 
-import "github.com/maleolabs/eka-core/conformance"
+import "github.com/maleolabs/eka-core/v2/conformance"
 
 // This file implements the architecture projection: the Architecture
 // domain (adr-, dec-, arc-, spec-, std-, gls-) grouped by type in fixed

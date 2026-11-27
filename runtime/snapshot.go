@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // This file implements the SnapshotService: the verified snapshot read

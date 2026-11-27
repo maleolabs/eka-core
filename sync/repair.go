@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // This file implements the snapshot repair path: the deterministic

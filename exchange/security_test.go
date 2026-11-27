@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // This file covers the export security surface: the identity charset guard

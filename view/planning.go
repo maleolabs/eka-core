@@ -3,7 +3,7 @@ package view
 import (
 	"sort"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // This file implements the planning projection: the Planning domain

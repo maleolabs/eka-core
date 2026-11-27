@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 	"gopkg.in/yaml.v3"
 )
 

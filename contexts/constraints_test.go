@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // This file tests the snapshot side of the constraint index

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // openTest opens a fresh store in a temp directory for one test.

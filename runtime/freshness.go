@@ -3,8 +3,8 @@ package runtime
 import (
 	"time"
 
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/machine"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/machine"
 )
 
 // Freshness statuses (the closed set reported by machine.Freshness).

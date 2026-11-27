@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/maleolabs/eka-core/api"
+	"github.com/maleolabs/eka-core/v2/api"
 )
 
 // syncFixture is the shared conformant sync fixture (4 units + 1

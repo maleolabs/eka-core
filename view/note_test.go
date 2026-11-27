@@ -3,7 +3,7 @@ package view
 import (
 	"testing"
 
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // This file tests the note accessors of the knowledge graph (ADR-019

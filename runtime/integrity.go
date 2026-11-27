@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"github.com/maleolabs/eka-core/store"
+	"github.com/maleolabs/eka-core/v2/store"
 )
 
 // This file implements the IntegrityService: the store integrity

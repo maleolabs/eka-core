@@ -4,7 +4,7 @@
 # eka-core has no version file: the version is the git tag. This script
 # computes the next semantic version from the latest tag and pushes it,
 # which is what Go module consumers resolve (`go get
-# github.com/maleolabs/eka-core@v1.1.0`).
+# github.com/maleolabs/eka-core/v2@v1.1.0`).
 #
 # Usage:
 #   ./scripts/bump.sh patch    # 1.0.0 -> 1.0.1

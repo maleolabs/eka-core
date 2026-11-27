@@ -5,9 +5,9 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/maleolabs/eka-core/compile"
-	"github.com/maleolabs/eka-core/conformance"
-	"github.com/maleolabs/eka-core/exchange"
+	"github.com/maleolabs/eka-core/v2/compile"
+	"github.com/maleolabs/eka-core/v2/conformance"
+	"github.com/maleolabs/eka-core/v2/exchange"
 )
 
 // loadFixture compiles a fixture repository through the Knowledge

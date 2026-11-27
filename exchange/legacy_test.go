@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // This file tests the legacy RSF import path (spec-standard-v2 §4):

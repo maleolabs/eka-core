@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/maleolabs/eka-core/conformance"
+	"github.com/maleolabs/eka-core/v2/conformance"
 )
 
 // dedupe_title_test.go guards the recorded-title contract (spec

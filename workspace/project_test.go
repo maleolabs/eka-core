@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/maleolabs/eka-core/metadata"
+	"github.com/maleolabs/eka-core/v2/metadata"
 )
 
 // testMetadata is the identity used across the metadata registry tests.

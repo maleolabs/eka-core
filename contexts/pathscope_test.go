@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/maleolabs/eka-core/exchange"
-	"github.com/maleolabs/eka-core/runtime"
+	"github.com/maleolabs/eka-core/v2/exchange"
+	"github.com/maleolabs/eka-core/v2/runtime"
 )
 
 // This file tests the Standard 1.5 path-to-constraint retrieval door
